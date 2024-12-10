@@ -125,7 +125,7 @@ export default function Footer() {
           <div className="grid grid-cols-1 gap-6 sm:grid-cols-3">
             <div className="flex items-center gap-3 text-zinc-400">
               <MapPin size={18} className="text-red-500" />
-              <span className="text-sm">123 Avenue des Arts, 75001 Paris</span>
+              <span className="text-sm">5 Allee de la Grande Treille, 35200 Rennes</span>
             </div>
             <div className="flex items-center gap-3 text-zinc-400">
               <Phone size={18} className="text-red-500" />

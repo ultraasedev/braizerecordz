@@ -31,12 +31,14 @@ export const artists: Artist[] = [
                     id: 1,
                     title: "Intro (Flammes)",
                     duration: "2:45",
+                     preview: "https://cdn.pixabay.com/download/audio/2022/05/27/audio_1808fbf07a.mp3",
                     streamingLinks: { spotify: "#", deezer: "#" }
                 },
                 {
                     id: 2,
                     title: "Nuit Rouge",
                     duration: "3:30",
+                    preview: "https://cdn.pixabay.com/download/audio/2022/05/27/audio_1808fbf07a.mp3",
                     featuring: ["MAES"],
                     streamingLinks: { spotify: "#", deezer: "#" }
                 },
@@ -44,6 +46,7 @@ export const artists: Artist[] = [
                     id: 3,
                     title: "Plus Rien à Perdre",
                     duration: "3:15",
+                    preview: "https://cdn.pixabay.com/download/audio/2022/05/27/audio_1808fbf07a.mp3",
                     streamingLinks: { spotify: "#", deezer: "#" }
                 }
             ],
@@ -153,12 +156,14 @@ export const artists: Artist[] = [
                   id: 4,
                   title: "Rouge Sang",
                   duration: "3:45",
+                  preview: "https://cdn.pixabay.com/download/audio/2022/05/27/audio_1808fbf07a.mp3",
                   streamingLinks: { spotify: "#", deezer: "#" }
               },
               {
                   id: 5,
                   title: "Dans la Nuit",
                   duration: "4:20",
+                  preview: "https://cdn.pixabay.com/download/audio/2022/05/27/audio_1808fbf07a.mp3",
                   featuring: ["LASHKA"],
                   streamingLinks: { spotify: "#", deezer: "#" }
               }
@@ -251,12 +256,14 @@ export const artists: Artist[] = [
                   id: 6,
                   title: "Faya",
                   duration: "3:15",
+                  preview: "https://cdn.pixabay.com/download/audio/2022/05/27/audio_1808fbf07a.mp3",
                   streamingLinks: { spotify: "#", deezer: "#" }
               },
               {
                   id: 7,
                   title: "Danse avec moi",
                   duration: "3:45",
+                  preview: "https://cdn.pixabay.com/download/audio/2022/05/27/audio_1808fbf07a.mp3",
                   streamingLinks: { spotify: "#", deezer: "#" }
               }
           ],
@@ -328,12 +335,14 @@ export const artists: Artist[] = [
                   id: 8,
                   title: "Contact",
                   duration: "3:30",
+                  preview: "https://cdn.pixabay.com/download/audio/2022/05/27/audio_1808fbf07a.mp3",
                   streamingLinks: { spotify: "#", deezer: "#" }
                 },
                 {
                     id: 9,
                     title: "Dancehall Queen",
                     duration: "3:45",
+                    preview: "https://cdn.pixabay.com/download/audio/2022/05/27/audio_1808fbf07a.mp3",
                     featuring: ["KEYZAH"],
                     streamingLinks: { spotify: "#", deezer: "#" }
                 }
@@ -417,12 +426,14 @@ export const artists: Artist[] = [
                     id: 10,
                     title: "Pression atmosphérique",
                     duration: "4:15",
+                    preview: "https://cdn.pixabay.com/download/audio/2022/05/27/audio_1808fbf07a.mp3",
                     streamingLinks: { spotify: "#", deezer: "#", appleMusic: "#" }
                 },
                 {
                     id: 11,
                     title: "Dans les nuages",
                     duration: "3:55",
+                    preview: "https://cdn.pixabay.com/download/audio/2022/05/27/audio_1808fbf07a.mp3",
                     streamingLinks: { spotify: "#", deezer: "#", appleMusic: "#" }
                 }
             ],
@@ -500,12 +511,14 @@ export const artists: Artist[] = [
                     id: 12,
                     title: "Miroir",
                     duration: "3:30",
+                    preview: "https://cdn.pixabay.com/download/audio/2022/05/27/audio_1808fbf07a.mp3",
                     streamingLinks: { spotify: "#", deezer: "#" }
                 },
                 {
                     id: 13,
                     title: "Miroir (Acoustic)",
                     duration: "3:25",
+                    preview: "https://cdn.pixabay.com/download/audio/2022/05/27/audio_1808fbf07a.mp3",
                     streamingLinks: { spotify: "#", deezer: "#" }
                 }
             ],
@@ -596,6 +609,7 @@ export const artists: Artist[] = [
                   id: 14,
                   title: "Night Call",
                   duration: "2:55",
+                  preview: "https://cdn.pixabay.com/download/audio/2022/05/27/audio_1808fbf07a.mp3",
                   streamingLinks: { spotify: "#", deezer: "#", youtubeMusic: "#" }
               }
           ],
@@ -675,12 +689,14 @@ export const artists: Artist[] = [
                   id: 15,
                   title: "Horizon",
                   duration: "4:05",
+                  preview: "https://cdn.pixabay.com/download/audio/2022/05/27/audio_1808fbf07a.mp3",
                   streamingLinks: { spotify: "#" }
               },
               {
                   id: 16,
                   title: "Océan",
                   duration: "3:45",
+                  preview: "https://cdn.pixabay.com/download/audio/2022/05/27/audio_1808fbf07a.mp3",
                   streamingLinks: { spotify: "#" }
                 }
             ],
@@ -762,6 +778,7 @@ export const artists: Artist[] = [
                     id: 17,
                     title: "Energy",
                     duration: "3:35",
+                    preview: "https://cdn.pixabay.com/download/audio/2022/05/27/audio_1808fbf07a.mp3",
                     streamingLinks: { spotify: "#", deezer: "#", youtubeMusic: "#" }
                 },
                 {
@@ -769,6 +786,7 @@ export const artists: Artist[] = [
                     title: "Energy (Remix)",
                     duration: "4:15",
                     featuring: ["DENZO"],
+                    preview: "https://cdn.pixabay.com/download/audio/2022/05/27/audio_1808fbf07a.mp3",
                     streamingLinks: { spotify: "#", deezer: "#", youtubeMusic: "#" }
                 }
             ],
@@ -850,6 +868,7 @@ export const artists: Artist[] = [
                     id: 19,
                     title: "Destiny",
                     duration: "3:25",
+                    preview: "https://cdn.pixabay.com/download/audio/2022/05/27/audio_1808fbf07a.mp3",
                     streamingLinks: { spotify: "#", deezer: "#", appleMusic: "#" }
                 }
             ],

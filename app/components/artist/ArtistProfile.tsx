@@ -284,15 +284,20 @@ export default function ArtistProfile({ artist }: ArtistProfileProps) {
                       key={track.id}
                       className="flex items-center gap-4 p-4 rounded-lg bg-zinc-900/50 hover:bg-zinc-900 transition-colors group"
                     >
-                    <button
-                onClick={() => {
-                  const newTrackId = activeTrack === track.id ? null : track.id;
-                  setActiveTrack(newTrackId);
-                  setIsPlaying(newTrackId !== null);
-                }}
-                className="flex-shrink-0 p-2 rounded-full bg-red-500 hover:bg-red-600 transition-colors"
-                aria-label={isPlaying && activeTrack === track.id ? "Pause" : "Play"}
-              >
+                      <button
+                        onClick={() => {
+                          const newTrackId =
+                            activeTrack === track.id ? null : track.id;
+                          setActiveTrack(newTrackId);
+                          setIsPlaying(newTrackId !== null);
+                        }}
+                        className="flex-shrink-0 p-2 rounded-full bg-red-500 hover:bg-red-600 transition-colors"
+                        aria-label={
+                          isPlaying && activeTrack === track.id
+                            ? "Pause"
+                            : "Play"
+                        }
+                      >
                         {isPlaying && activeTrack === track.id ? (
                           <Pause className="w-4 h-4 text-white" />
                         ) : (
