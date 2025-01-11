@@ -29,7 +29,7 @@ jobs:
         with:
           host: ${{ secrets.VPS_HOST }} # Adresse IP de votre VPS
           username: ${{ secrets.VPS_USER }} # Nom d'utilisateur SSH
-          key: ${{ secrets.VPS_KEY }} # Clé privée SSH (recommandé) ou password: ${{ secrets.VPS_PASSWORD }} (moins sécurisé)
+          password: ${{ secrets.VPS_PASSWORD }} #password
           port: ${{ secrets.VPS_PORT || 22 }} # Port SSH (22 par défaut)
           script: |
             cd /var/www/braizerecords # Chemin sur le VPS où vous déployez
