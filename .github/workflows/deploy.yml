@@ -32,7 +32,7 @@ jobs:
           password: ${{ secrets.VPS_PASSWORD }} #password
           port: ${{ secrets.VPS_PORT || 22 }} # Port SSH (22 par défaut)
           script: |
-            cd /var/www/braizerecords # Chemin sur le VPS où vous déployez
+            cd /var/www/braizerecords.com/web # Chemin sur le VPS où vous déployez
             git pull origin main # Mettre à jour le code (si vous utilisez un dépôt sur le VPS) ou rm -rf * && cp -r ../../.next . && cp ../../public .
             npm ci --production
             pm2 restart votre-app # Redémarrer l'application avec PM2 (ou pm2 start si c'est le premier déploiement)
