@@ -1,0 +1,10 @@
+version: '3.8'
+
+services:
+  app:
+    build: .  # Construit l'image à partir du Dockerfile
+    ports:
+      - "3000:3000"  # Expose le port 3000 de l'application
+    env_file:
+      - .env  # Charge les variables d'environnement depuis un fichier .env
+    restart: always  # Redémarre automatiquement le conteneur en cas de crash

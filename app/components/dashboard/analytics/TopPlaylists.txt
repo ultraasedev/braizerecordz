@@ -1,0 +1,232 @@
+// components/analytics/TopPlaylists.tsx
+"use client"
+
+import { useState } from 'react'
+import Image from 'next/image'
+import { Users, Music2, ExternalLink, Filter } from 'lucide-react'
+import { useStreamingData } from '@/app/hooks/useStreamingData'
+import { Button } from "@/components/ui/button"
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem
+} from "@/components/ui/dropdown-menu"
+import { Skeleton } from "@/components/ui/skeleton"
+import { Badge } from "@/components/ui/badge"
+import { Card } from "@/components/ui/card"
+import { cn } from "@/lib/utils"
+import { Playlist, PlatformType } from '@/app/types/streaming'
+
+const PLATFORM_ICONS = {
+  spotify: '/icons/spotify.svg',
+  deezer: '/icons/deezer.svg',
+  youtube: '/icons/youtube.svg',
+  lastfm: '/icons/lastfm.svg',
+  jamendo: '/icons/jamendo.svg'
+} as const
+
+const PLATFORMS: Array<{ id: PlatformType | 'all', label: string }> = [
+  { id: 'all', label: 'Toutes les plateformes' },
+  { id: 'spotify', label: 'Spotify' },
+  { id: 'deezer', label: 'Deezer' },
+  { id: 'youtube', label: 'YouTube' },
+  { id: 'lastfm', label: 'Last.fm' },
+  { id: 'jamendo', label: 'Jamendo' }
+]
+
+interface TopPlaylistsProps {
+  platforms: PlatformType[]
+  region: string
+}
+
+export default function TopPlaylists({ platforms, region }: TopPlaylistsProps) {
+  const [selectedPlatform, setSelectedPlatform] = useState<PlatformType | 'all'>('all')
+
+  const { data, isLoading, error } = useStreamingData<Playlist[]>('playlists', {
+    type: 'playlists',
+    platforms: selectedPlatform === 'all' ? platforms : [selectedPlatform as PlatformType],
+    region
+  })
+
+  const formatNumber = (num: number) => {
+    if (num >= 1_000_000) return `${(num / 1_000_000).toFixed(1)}M`
+    if (num >= 1_000) return `${(num / 1_000).toFixed(1)}k`
+    return num.toLocaleString()
+  }
+
+  if (isLoading) {
+    return (
+      <div className="space-y-3 p-4">
+        <Skeleton className="h-8 w-2/3" />
+        <Skeleton className="h-6 w-1/2" />
+        {[...Array(3)].map((_, i) => (
+          <Skeleton key={i} className="h-24 w-full mt-4" />
+        ))}
+      </div>
+    )
+  }
+
+  if (error || !data?.data) {
+    return (
+      <Card className="p-8 text-center">
+        <p className="text-zinc-400">
+          Impossible de charger les playlists
+        </p>
+        <Button 
+          variant="outline" 
+          className="mt-4"
+          onClick={() => window.location.reload()}
+        >
+          Réessayer
+        </Button>
+      </Card>
+    )
+  }
+
+  const playlists = data.data
+  const filteredPlaylists = selectedPlatform === 'all'
+    ? playlists
+    : playlists.filter(p => p.platform === selectedPlatform)
+
+  return (
+    <div className="space-y-4">
+      {/* En-tête */}
+      <div className="p-4 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h2 className="text-xl font-bold text-white">Top Playlists</h2>
+          <p className="text-sm text-zinc-400 mt-1">
+            Présence dans les playlists populaires
+          </p>
+        </div>
+
+        {/* Filtre des plateformes */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="outline"
+              className="w-full sm:w-auto bg-zinc-900/50 border-zinc-800 group"
+            >
+              <Filter className="w-4 h-4 mr-2 group-hover:text-blue-500" />
+              {PLATFORMS.find(p => p.id === selectedPlatform)?.label}
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-[200px] bg-zinc-900 border-zinc-800">
+            {PLATFORMS.map(platform => (
+              <DropdownMenuItem
+                key={platform.id}
+                className={cn(
+                  "flex items-center gap-2 text-white hover:bg-zinc-800",
+                  selectedPlatform === platform.id && "bg-zinc-800"
+                )}
+                onClick={() => setSelectedPlatform(platform.id as PlatformType | 'all')}
+              >
+                {platform.id !== 'all' && (
+                  <Image
+                    src={PLATFORM_ICONS[platform.id as PlatformType]}
+                    alt={platform.label}
+                    width={16}
+                    height={16}
+                  />
+                )}
+                {platform.label}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+
+      {/* Liste des playlists */}
+      {filteredPlaylists.length === 0 ? (
+        <div className="p-8 text-center">
+          <p className="text-zinc-400">Aucune playlist trouvée</p>
+        </div>
+      ) : (
+        <div className="divide-y divide-zinc-800">
+          {filteredPlaylists.map(playlist => (
+            <div
+              key={playlist.id}
+              className="p-4 hover:bg-zinc-800/50 transition-colors"
+            >
+              <div className="flex flex-col sm:flex-row gap-4">
+                {/* Image et infos principales */}
+                <div className="flex items-start gap-4">
+                  <div className="relative w-16 h-16 flex-shrink-0 rounded-lg overflow-hidden">
+                    <Image
+                      src={playlist.imageUrl || playlist.images || '/placeholder-playlist.jpg'}
+                      alt={playlist.name}
+                      fill
+                      className="object-cover"
+                      sizes="64px"
+                    />
+                    {/* Badge plateforme */}
+                    <div className="absolute bottom-1 right-1 w-5 h-5 rounded-full bg-black/50 p-1">
+                      <Image
+                        src={PLATFORM_ICONS[playlist.platform]}
+                        alt={playlist.platform}
+                        width={12}
+                        height={12}
+                        className="w-full h-full"
+                      />
+                    </div>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <h3 className="font-medium text-white truncate">
+                      {playlist.name}
+                    </h3>
+                    <p className="text-sm text-zinc-400 truncate">
+                      Par {playlist.curator}
+                    </p>
+                    
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-2 mt-2">
+                      <div className="flex items-center gap-1">
+                        <Users className="w-4 h-4 text-zinc-500" />
+                        <span className="text-sm text-zinc-400">
+                          {formatNumber(playlist.followers)} followers
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <Music2 className="w-4 h-4 text-zinc-500" />
+                        <span className="text-sm text-zinc-400">
+                          {playlist.tracksCount} titres
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Actions */}
+                <div className="flex items-center gap-2 sm:ml-auto">
+                  {playlist.url && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="w-full sm:w-auto"
+                      onClick={() => window.open(playlist.url, '_blank')}
+                    >
+                      <ExternalLink className="w-4 h-4 mr-2" />
+                      Ouvrir
+                    </Button>
+                  )}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Pagination ou Load More */}
+      {filteredPlaylists.length >= 10 && (
+        <div className="p-4">
+          <Button
+            variant="outline"
+            className="w-full"
+          >
+            Voir plus de playlists
+            <ExternalLink className="w-4 h-4 ml-2" />
+          </Button>
+        </div>
+      )}
+    </div>
+  )
+}

@@ -1,0 +1,30 @@
+import express from 'express';
+import SpotifyWebApi from 'spotify-web-api-node';
+
+const app = express();
+
+const spotifyApi = new SpotifyWebApi({
+  clientId: 'VOTRE_CLIENT_ID',
+  clientSecret: 'VOTRE_CLIENT_SECRET',
+  redirectUri: 'http://localhost:3000/callback'
+});
+
+app.get('/callback', async (req, res) => {
+  const { code } = req.query;
+  
+  try {
+    const data = await spotifyApi.authorizationCodeGrant(code as string);
+    
+    console.log('Access Token:', data.body['access_token']);
+    console.log('Refresh Token:', data.body['refresh_token']);
+    
+    res.send('Token récupéré ! Vous pouvez fermer cette fenêtre.');
+  } catch (error) {
+    console.error('Erreur:', error);
+    res.status(500).send('Erreur lors de la récupération du token');
+  }
+});
+
+app.listen(3000, () => {
+  console.log('Serveur démarré sur http://localhost:3000');
+});
