@@ -1,0 +1,108 @@
+// app/api/smart-links/[id]/route.ts
+import { NextRequest, NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth/next'
+import { authOptions } from '@/app/api/auth/[...nextauth]/route'
+import connectDB from '@/lib/mongodb'
+import Release from '@/app/models/Release'
+import SmartLink from '@/app/models/SmartLink'
+
+/**
+ * Récupérer les données d'un SmartLink
+ */
+export async function GET(
+  request: NextRequest,
+  { params }: { params: { id: string } }
+) {
+  try {
+    await connectDB()
+    
+    // Récupérer l'ID du SmartLink
+    const { id } = params
+    
+    // Rechercher le SmartLink dans la base de données
+    const smartLink = await SmartLink.findOne({ 
+      $or: [
+        { releaseId: id },
+        { customSlug: id }
+      ]
+    }).populate('releaseId')
+    
+    if (!smartLink) {
+      return NextResponse.json({ error: 'SmartLink introuvable' }, { status: 404 })
+    }
+    
+    // Retourner les données du SmartLink et de la release
+    return NextResponse.json(smartLink)
+  } catch (error) {
+    console.error('Erreur:', error)
+    return NextResponse.json(
+      { error: 'Erreur serveur lors de la récupération du SmartLink' },
+      { status: 500 }
+    )
+  }
+}
+
+/**
+ * Mettre à jour un SmartLink
+ */
+export async function PUT(
+  request: NextRequest,
+  { params }: { params: { id: string } }
+) {
+  try {
+    // Vérifier l'authentification
+    const session = await getServerSession(authOptions)
+    
+    if (!session) {
+      return NextResponse.json({ error: 'Non autorisé' }, { status: 401 })
+    }
+    
+    await connectDB()
+    
+    // Récupérer l'ID du SmartLink
+    const { id } = params
+    
+    // Récupérer les données à mettre à jour
+    const data = await request.json()
+    
+    // Rechercher le SmartLink
+    const smartLink = await SmartLink.findOne({ releaseId: id })
+    
+    if (!smartLink) {
+      return NextResponse.json({ error: 'SmartLink introuvable' }, { status: 404 })
+    }
+    
+    // Vérifier que l'utilisateur a les droits de mise à jour
+    const release = await Release.findById(id)
+    
+    if (!release) {
+      return NextResponse.json({ error: 'Release introuvable' }, { status: 404 })
+    }
+    
+    // Vérifier que l'utilisateur est le propriétaire de la release ou un admin
+    if (release.createdBy.toString() !== session.user.id && session.user.role !== 'superadmin') {
+      return NextResponse.json({ error: 'Non autorisé' }, { status: 403 })
+    }
+    
+    // Mettre à jour le SmartLink
+    const updatedSmartLink = await SmartLink.findByIdAndUpdate(
+      smartLink._id,
+      { $set: data },
+      { new: true }
+    )
+    
+    return NextResponse.json(updatedSmartLink)
+  } catch (error) {
+    console.error('Erreur:', error)
+    return NextResponse.json(
+      { error: 'Erreur serveur lors de la mise à jour du SmartLink' },
+      { status: 500 }
+    )
+  }
+}
+
+/**
+ * Récupérer les statistiques d'un SmartLink
+ */
+export async function POST(
+  request: NextRequest,

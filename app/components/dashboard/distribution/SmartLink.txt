@@ -1,0 +1,441 @@
+// app/components/dashboard/distribution/SmartLink.tsx
+"use client"
+
+import { useState, useEffect } from "react"
+import { motion } from "framer-motion"
+import { 
+  Share2, Copy, Globe, Download, PlayCircle, PauseCircle, 
+  ExternalLink, Instagram, Twitter, Facebook, Clipboard,
+  ChevronDown, ChevronUp, Music, Check, QrCode
+} from "lucide-react"
+import { toast } from "sonner"
+import { Release, ReleaseStatus, DistributionPlatform } from "@/app/types/distribution"
+import Image from "next/image"
+
+// Configuration des plateformes
+const PLATFORM_CONFIG = {
+  spotify: {
+    name: "Spotify",
+    icon: "/images/platforms/spotify.svg",
+    color: "bg-green-500",
+    textColor: "text-white",
+    order: 1
+  },
+  appleMusic: {
+    name: "Apple Music",
+    icon: "/images/platforms/apple-music.svg",
+    color: "bg-white",
+    textColor: "text-black",
+    order: 2
+  },
+  deezer: {
+    name: "Deezer",
+    icon: "/images/platforms/deezer.svg",
+    color: "bg-purple-500",
+    textColor: "text-white",
+    order: 3
+  },
+  youtubeMusic: {
+    name: "YouTube Music",
+    icon: "/images/platforms/youtube-music.svg",
+    color: "bg-red-500",
+    textColor: "text-white",
+    order: 4
+  },
+  amazonMusic: {
+    name: "Amazon Music",
+    icon: "/images/platforms/amazon-music.svg", 
+    color: "bg-blue-500",
+    textColor: "text-white",
+    order: 5
+  },
+  tidal: {
+    name: "Tidal",
+    icon: "/images/platforms/tidal.svg",
+    color: "bg-black",
+    textColor: "text-white",
+    order: 6
+  },
+  napster: {
+    name: "Napster",
+    icon: "/images/platforms/napster.svg",
+    color: "bg-red-600",
+    textColor: "text-white",
+    order: 7
+  },
+  boomplay: {
+    name: "Boomplay",
+    icon: "/images/platforms/boomplay.svg",
+    color: "bg-amber-500",
+    textColor: "text-black",
+    order: 8
+  }
+}
+
+interface SmartLinkProps {
+  release: Release
+  platformLinks?: Record<DistributionPlatform, string>
+  onSave?: () => void
+}
+
+interface StreamingLink {
+  platform: DistributionPlatform
+  url: string
+  available: boolean
+}
+
+export default function SmartLink({ release, platformLinks = {}, onSave }: SmartLinkProps) {
+  // États
+  const [smartLinkUrl, setSmartLinkUrl] = useState<string>("")
+  const [copied, setCopied] = useState<boolean>(false)
+  const [streamingLinks, setStreamingLinks] = useState<StreamingLink[]>([])
+  const [currentlyPlaying, setCurrentlyPlaying] = useState<boolean>(false)
+  const [showAllPlatforms, setShowAllPlatforms] = useState<boolean>(false)
+  const [isGeneratingQR, setIsGeneratingQR] = useState<boolean>(false)
+  const [qrCodeUrl, setQrCodeUrl] = useState<string | null>(null)
+
+  // Effet pour générer le lien smartlink
+  useEffect(() => {
+    // Dans une implémentation réelle, cette URL serait générée par le serveur
+    const baseUrl = window.location.origin
+    const linkPath = `/l/${release.id}`
+    setSmartLinkUrl(`${baseUrl}${linkPath}`)
+    
+    // Préparer les liens de streaming
+    const links: StreamingLink[] = release.platforms.map(platform => ({
+      platform,
+      url: platformLinks[platform] || "#", // URL réelle ou placeholder
+      available: !!platformLinks[platform] // Disponible si URL fournie
+    }))
+    
+    // Trier par ordre de priorité
+    links.sort((a, b) => {
+      const orderA = PLATFORM_CONFIG[a.platform]?.order || 999
+      const orderB = PLATFORM_CONFIG[b.platform]?.order || 999
+      return orderA - orderB
+    })
+    
+    setStreamingLinks(links)
+  }, [release, platformLinks])
+
+  // Copier le lien smartlink
+  const copySmartLink = () => {
+    navigator.clipboard.writeText(smartLinkUrl)
+    setCopied(true)
+    toast.success("Lien copié !")
+    
+    setTimeout(() => {
+      setCopied(false)
+    }, 2000)
+  }
+
+  // Partager le lien
+  const shareTo = (platform: 'twitter' | 'facebook' | 'instagram') => {
+    let shareUrl = ""
+    const text = encodeURIComponent(`Écoutez "${release.title}" par ${release.artist.name} sur toutes les plateformes !`)
+    
+    switch (platform) {
+      case 'twitter':
+        shareUrl = `https://twitter.com/intent/tweet?text=${text}&url=${encodeURIComponent(smartLinkUrl)}`
+        break
+      case 'facebook':
+        shareUrl = `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(smartLinkUrl)}`
+        break
+      case 'instagram':
+        // Instagram ne peut pas être partagé directement par URL, donc on copie le lien
+        navigator.clipboard.writeText(smartLinkUrl)
+        toast.success("Lien copié ! Collez-le dans votre story Instagram")
+        return
+    }
+    
+    if (shareUrl) {
+      window.open(shareUrl, '_blank', 'width=600,height=400')
+    }
+  }
+
+  // Contrôle de la lecture audio
+  const togglePlayback = () => {
+    setCurrentlyPlaying(!currentlyPlaying)
+    // Dans une implémentation réelle, ici on contrôlerait la lecture audio
+  }
+
+  // Génération du QR Code
+  const generateQRCode = async () => {
+    setIsGeneratingQR(true)
+    
+    try {
+      // Dans une implémentation réelle, cette URL serait générée par une API
+      const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(smartLinkUrl)}`
+      setQrCodeUrl(qrUrl)
+    } catch (error) {
+      console.error("Erreur lors de la génération du QR Code:", error)
+      toast.error("Impossible de générer le QR Code")
+    } finally {
+      setIsGeneratingQR(false)
+    }
+  }
+
+  // Télécharger le QR Code
+  const downloadQRCode = () => {
+    if (!qrCodeUrl) return
+    
+    const link = document.createElement('a')
+    link.href = qrCodeUrl
+    link.download = `${release.title.replace(/\s+/g, '_')}_qrcode.png`
+    link.click()
+  }
+
+  // Plateformes à afficher (limitées ou toutes)
+  const visiblePlatforms = showAllPlatforms 
+    ? streamingLinks 
+    : streamingLinks.slice(0, 4)
+
+  return (
+    <div className="bg-zinc-900/50 border border-zinc-800 rounded-xl p-6 space-y-6">
+      <div className="flex items-center justify-between">
+        <h2 className="text-xl font-semibold text-white">SmartLink</h2>
+        
+        {/* Statut du lien */}
+        <div className="px-3 py-1 bg-green-500 text-white text-sm rounded-full">
+          Actif
+        </div>
+      </div>
+      
+      {/* Section principale */}
+      <div className="flex flex-col md:flex-row gap-6">
+        {/* Aperçu du lien */}
+        <div className="flex-1 bg-zinc-800 rounded-xl overflow-hidden">
+          <div className="bg-gradient-to-br from-red-500/20 to-purple-500/20 p-6">
+            <div className="aspect-square max-w-xs mx-auto rounded-xl overflow-hidden shadow-xl">
+              {release.artwork.cover ? (
+                <Image 
+                  src={release.artwork.cover} 
+                  alt={release.title}
+                  width={300}
+                  height={300}
+                  className="w-full h-full object-cover"
+                />
+              ) : (
+                <div className="w-full h-full bg-zinc-700 flex items-center justify-center">
+                  <Music className="w-12 h-12 text-zinc-500" />
+                </div>
+              )}
+            </div>
+            
+            <div className="mt-4 text-center">
+              <h3 className="text-xl font-bold text-white">{release.title}</h3>
+              <p className="text-zinc-400 mt-1">{release.artist.name}</p>
+              
+              {/* Bouton lecture */}
+              <button 
+                onClick={togglePlayback}
+                className="mt-4 p-3 bg-red-500 hover:bg-red-600 text-white rounded-full shadow-lg transition-colors"
+              >
+                {currentlyPlaying ? (
+                  <PauseCircle className="w-6 h-6" />
+                ) : (
+                  <PlayCircle className="w-6 h-6" />
+                )}
+              </button>
+            </div>
+          </div>
+          
+          {/* Liste des plateformes */}
+          <div className="p-6 space-y-3">
+            {visiblePlatforms.map((link, index) => {
+              const platformConfig = PLATFORM_CONFIG[link.platform]
+              
+              if (!platformConfig) return null
+              
+              return (
+                <motion.a
+                  key={link.platform}
+                  href={link.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: index * 0.1 }}
+                  className={`flex items-center justify-between p-3 rounded-lg ${platformConfig.color} ${platformConfig.textColor} hover:opacity-90 transition-opacity`}
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center">
+                      <Image 
+                        src={platformConfig.icon} 
+                        alt={platformConfig.name}
+                        width={20}
+                        height={20}
+                        className="w-5 h-5 object-contain"
+                      />
+                    </div>
+                    <span>{platformConfig.name}</span>
+                  </div>
+                  <ExternalLink className="w-5 h-5" />
+                </motion.a>
+              )
+            })}
+            
+            {/* Bouton pour afficher plus de plateformes */}
+            {streamingLinks.length > 4 && (
+              <button
+                onClick={() => setShowAllPlatforms(!showAllPlatforms)}
+                className="w-full p-3 bg-zinc-700 hover:bg-zinc-600 text-zinc-300 rounded-lg transition-colors flex items-center justify-center gap-1"
+              >
+                {showAllPlatforms ? (
+                  <>
+                    <ChevronUp className="w-4 h-4" />
+                    Afficher moins
+                  </>
+                ) : (
+                  <>
+                    <ChevronDown className="w-4 h-4" />
+                    Voir {streamingLinks.length - 4} plateforme{streamingLinks.length - 4 > 1 ? "s" : ""} de plus
+                  </>
+                )}
+              </button>
+            )}
+          </div>
+        </div>
+        
+        {/* Options de partage */}
+        <div className="w-full md:w-80 space-y-6">
+          {/* Lien de partage */}
+          <div className="p-4 bg-zinc-800 rounded-xl">
+            <h3 className="text-lg font-medium text-white mb-3">Partager le lien</h3>
+            
+            <div className="flex items-center gap-2 mb-4">
+              <div className="flex-1 px-3 py-2 bg-zinc-700 rounded-lg text-white truncate">
+                {smartLinkUrl}
+              </div>
+              <button
+                onClick={copySmartLink}
+                className="p-2 bg-zinc-700 hover:bg-zinc-600 text-zinc-300 rounded-lg transition-colors"
+              >
+                {copied ? (
+                  <Check className="w-5 h-5 text-green-500" />
+                ) : (
+                  <Copy className="w-5 h-5" />
+                )}
+              </button>
+            </div>
+            
+            <div className="flex items-center justify-center gap-3">
+              <button
+                onClick={() => shareTo('twitter')}
+                className="p-3 bg-[#1DA1F2] text-white rounded-full hover:opacity-90 transition-opacity"
+              >
+                <Twitter className="w-5 h-5" />
+              </button>
+              <button
+                onClick={() => shareTo('facebook')}
+                className="p-3 bg-[#4267B2] text-white rounded-full hover:opacity-90 transition-opacity"
+              >
+                <Facebook className="w-5 h-5" />
+              </button>
+              <button
+                onClick={() => shareTo('instagram')}
+                className="p-3 bg-gradient-to-br from-[#833AB4] via-[#FD1D1D] to-[#FCAF45] text-white rounded-full hover:opacity-90 transition-opacity"
+              >
+                <Instagram className="w-5 h-5" />
+              </button>
+              <button
+                onClick={copySmartLink}
+                className="p-3 bg-zinc-700 text-white rounded-full hover:bg-zinc-600 transition-colors"
+              >
+                <Clipboard className="w-5 h-5" />
+              </button>
+            </div>
+          </div>
+          
+          {/* QR Code */}
+          <div className="p-4 bg-zinc-800 rounded-xl">
+            <h3 className="text-lg font-medium text-white mb-3">QR Code</h3>
+            
+            <div className="flex flex-col items-center">
+              {qrCodeUrl ? (
+                <div className="p-4 bg-white rounded-lg mb-3">
+                  <Image 
+                    src={qrCodeUrl} 
+                    alt="QR Code" 
+                    width={150} 
+                    height={150}
+                    className="w-full"
+                  />
+                </div>
+              ) : (
+                <div className="w-40 h-40 bg-zinc-700 rounded-lg flex items-center justify-center mb-3">
+                  <QrCode className="w-12 h-12 text-zinc-500" />
+                </div>
+              )}
+              
+              <div className="flex gap-2 w-full">
+                <button
+                  onClick={generateQRCode}
+                  disabled={isGeneratingQR || !!qrCodeUrl}
+                  className="flex-1 p-2 bg-red-500 hover:bg-red-600 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1"
+                >
+                  {isGeneratingQR ? (
+                    <>Génération...</>
+                  ) : qrCodeUrl ? (
+                    <>
+                      <Check className="w-4 h-4" />
+                      Généré
+                    </>
+                  ) : (
+                    <>
+                      <QrCode className="w-4 h-4" />
+                      Générer
+                    </>
+                  )}
+                </button>
+                
+                {qrCodeUrl && (
+                  <button
+                    onClick={downloadQRCode}
+                    className="p-2 bg-zinc-700 hover:bg-zinc-600 text-white rounded-lg transition-colors flex items-center justify-center"
+                  >
+                    <Download className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+          
+          {/* Statistiques */}
+          <div className="p-4 bg-zinc-800 rounded-xl">
+            <h3 className="text-lg font-medium text-white mb-3">Statistiques</h3>
+            
+            <div className="space-y-2">
+              <div className="flex justify-between">
+                <span className="text-zinc-400">Vues</span>
+                <span className="text-white font-medium">521</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-zinc-400">Clics</span>
+                <span className="text-white font-medium">183</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-zinc-400">Taux de conversion</span>
+                <span className="text-white font-medium">35.1%</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      {/* Personnalisation */}
+      <div className="pt-4 border-t border-zinc-800">
+        <div className="flex justify-between items-center">
+          <h3 className="text-lg font-medium text-white">Personnalisation</h3>
+          
+          <button
+            onClick={onSave}
+            className="px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg transition-colors flex items-center gap-2"
+          >
+            Enregistrer
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}

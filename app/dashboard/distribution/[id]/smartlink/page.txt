@@ -1,0 +1,1547 @@
+// app/dashboard/distribution/[id]/smartlink/page.tsx
+"use client"
+
+import { useState, useEffect, useRef } from "react"
+import { useParams, useRouter } from "next/navigation"
+import Image from "next/image"
+import { motion, AnimatePresence } from "framer-motion"
+import { 
+  Share2, Copy, Globe, Download, PlayCircle, PauseCircle, 
+  ExternalLink, Instagram, Twitter, Facebook, Clipboard,
+  ChevronDown, ChevronUp, Music, Check, QrCode, Loader2,
+  X, Settings, BarChart2, Link, Edit, Eye, ArrowLeft,
+  MessageSquare, Palette, Sliders, RefreshCw, Calendar,
+  Repeat, Volume, Volume2, VolumeX, Lock, Unlock, Save,
+  Info
+} from "lucide-react"
+import { toast } from "sonner"
+import { Release, ReleaseStatus, DistributionPlatform } from "@/app/types/distribution"
+
+// Configuration des plateformes
+const PLATFORM_CONFIG: Record<string, {
+  name: string;
+  icon: string;
+  color: string;
+  textColor: string;
+  order: number;
+}> = {
+  spotify: {
+    name: "Spotify",
+    icon: "/images/platforms/spotify.svg",
+    color: "bg-green-500",
+    textColor: "text-white",
+    order: 1
+  },
+  appleMusic: {
+    name: "Apple Music",
+    icon: "/images/platforms/apple-music.svg",
+    color: "bg-white",
+    textColor: "text-black",
+    order: 2
+  },
+  deezer: {
+    name: "Deezer",
+    icon: "/images/platforms/deezer.svg",
+    color: "bg-purple-500",
+    textColor: "text-white",
+    order: 3
+  },
+  youtubeMusic: {
+    name: "YouTube Music",
+    icon: "/images/platforms/youtube-music.svg",
+    color: "bg-red-500",
+    textColor: "text-white",
+    order: 4
+  },
+  amazonMusic: {
+    name: "Amazon Music",
+    icon: "/images/platforms/amazon-music.svg", 
+    color: "bg-blue-500",
+    textColor: "text-white",
+    order: 5
+  },
+  tidal: {
+    name: "Tidal",
+    icon: "/images/platforms/tidal.svg",
+    color: "bg-black",
+    textColor: "text-white",
+    order: 6
+  },
+  napster: {
+    name: "Napster",
+    icon: "/images/platforms/napster.svg",
+    color: "bg-red-600",
+    textColor: "text-white",
+    order: 7
+  },
+  pandora: {
+    name: "Pandora",
+    icon: "/images/platforms/pandora.svg",
+    color: "bg-blue-600",
+    textColor: "text-white",
+    order: 8
+  },
+  boomplay: {
+    name: "Boomplay",
+    icon: "/images/platforms/boomplay.svg",
+    color: "bg-amber-500",
+    textColor: "text-black",
+    order: 9
+  }
+}
+
+// Type pour les stats
+interface SmartLinkStats {
+  views: number
+  clicks: number
+  platformClicks: Record<string, number>
+  conversionRate: number
+  lastUpdated: string
+}
+
+// Type pour les paramètres de personnalisation
+interface SmartLinkSettings {
+  autoplay: boolean
+  customBgColor: string
+  customTextColor: string
+  showLyrics: boolean
+  customDomain: string
+  analyticsEnabled: boolean
+  showReleaseDate: boolean
+  customTrackOrder: boolean
+}
+
+export default function SmartLinkPage() {
+  const { id } = useParams<{ id: string }>()
+  const router = useRouter()
+  
+  // États
+  const [release, setRelease] = useState<Release | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
+  const [currentlyPlaying, setCurrentlyPlaying] = useState<boolean>(false)
+  const [showAllPlatforms, setShowAllPlatforms] = useState<boolean>(false)
+  const [smartLinkUrl, setSmartLinkUrl] = useState<string>("")
+  const [copied, setCopied] = useState<boolean>(false)
+  const [editMode, setEditMode] = useState<boolean>(false)
+  const [platformLinks, setPlatformLinks] = useState<Record<string, string>>({})
+  const [stats, setStats] = useState<SmartLinkStats | null>(null)
+  const [isGeneratingQR, setIsGeneratingQR] = useState<boolean>(false)
+  const [qrCodeUrl, setQrCodeUrl] = useState<string | null>(null)
+  const [showPreview, setShowPreview] = useState<boolean>(false)
+  const [isSubmitting, setIsSubmitting] = useState<boolean>(false)
+  const [currentTab, setCurrentTab] = useState<'links' | 'stats' | 'settings'>('links')
+  const [settings, setSettings] = useState<SmartLinkSettings>({
+    autoplay: false,
+    customBgColor: "#000000",
+    customTextColor: "#ffffff",
+    showLyrics: true,
+    customDomain: "",
+    analyticsEnabled: true,
+    showReleaseDate: true,
+    customTrackOrder: false
+  })
+  const [showLyrics, setShowLyrics] = useState<boolean>(false)
+  const [audioDuration, setAudioDuration] = useState<number>(0)
+  const [audioProgress, setAudioProgress] = useState<number>(0)
+  const [customLinkSlug, setCustomLinkSlug] = useState<string>("")
+  const [isMuted, setIsMuted] = useState<boolean>(false)
+  
+  // Références
+  const audioRef = useRef<HTMLAudioElement | null>(null)
+  
+  // Charger les données de la release
+  useEffect(() => {
+    const fetchRelease = async () => {
+      try {
+        setIsLoading(true)
+        
+        // Simuler l'appel API pour récupérer les données de la release
+        // Dans une implémentation réelle, ce serait un vrai appel à l'API
+        await new Promise(resolve => setTimeout(resolve, 800))
+        
+        // Appel API factice pour la démo
+        const response = await fetch(`/api/distribution/releases/${id}`)
+        
+        if (!response.ok) {
+          throw new Error('Impossible de charger les données de la release')
+        }
+        
+        const data = await response.json()
+        setRelease(data)
+        
+        // Générer l'URL du smartlink
+        const baseUrl = window.location.origin
+        const linkPath = `/l/${id}`
+        setSmartLinkUrl(`${baseUrl}${linkPath}`)
+        setCustomLinkSlug(data.title.toLowerCase().replace(/\s+/g, '-'))
+        
+        // Charger les liens des plateformes (simulé)
+        fetchPlatformLinks()
+        
+        // Charger les statistiques (simulées)
+        fetchStats()
+        
+        // Charger les paramètres (simulés)
+        fetchSettings()
+
+        // Simuler une durée audio pour la piste principale
+        setAudioDuration(180) // 3 minutes en secondes
+        
+      } catch (error) {
+        console.error('Erreur:', error)
+        toast.error("Impossible de charger les données de la release")
+      } finally {
+        setIsLoading(false)
+      }
+    }
+    
+    const fetchPlatformLinks = async () => {
+      try {
+        // Simuler l'appel API
+        await new Promise(resolve => setTimeout(resolve, 500))
+        
+        // Créer des liens fictifs pour la démo
+        const mockLinks: Record<string, string> = {
+          spotify: "https://open.spotify.com/album/sample",
+          appleMusic: "https://music.apple.com/album/sample",
+          deezer: "https://www.deezer.com/album/sample",
+          youtubeMusic: "https://music.youtube.com/playlist?list=sample",
+          amazonMusic: "https://music.amazon.com/albums/sample",
+          tidal: "https://tidal.com/browse/album/sample",
+          napster: "https://us.napster.com/artist/sample",
+          pandora: "https://www.pandora.com/artist/sample",
+          boomplay: "https://www.boomplay.com/albums/sample"
+        }
+        
+        setPlatformLinks(mockLinks)
+      } catch (error) {
+        console.error('Erreur:', error)
+        // Initialiser avec des liens vides pour chaque plateforme
+        const emptyLinks = Object.keys(PLATFORM_CONFIG).reduce((acc, platform) => {
+          acc[platform] = "";
+          return acc;
+        }, {} as Record<string, string>);
+        
+        setPlatformLinks(emptyLinks);
+      }
+    }
+    
+    const fetchStats = async () => {
+      try {
+        // Simuler l'appel API
+        await new Promise(resolve => setTimeout(resolve, 600))
+        
+        // Créer des statistiques fictives pour la démo
+        const mockStats: SmartLinkStats = {
+          views: 1256,
+          clicks: 684,
+          platformClicks: {
+            spotify: 325,
+            appleMusic: 158,
+            deezer: 98,
+            youtubeMusic: 74,
+            amazonMusic: 29
+          },
+          conversionRate: 54.5,
+          lastUpdated: new Date().toISOString()
+        }
+        
+        setStats(mockStats)
+      } catch (error) {
+        console.error('Erreur:', error)
+        // Utiliser des stats par défaut en cas d'erreur
+        setStats({
+          views: 0,
+          clicks: 0,
+          platformClicks: {},
+          conversionRate: 0,
+          lastUpdated: new Date().toISOString()
+        })
+      }
+    }
+    
+    const fetchSettings = async () => {
+      try {
+        // Simuler l'appel API
+        await new Promise(resolve => setTimeout(resolve, 400))
+        
+        // Utiliser les paramètres par défaut
+      } catch (error) {
+        console.error('Erreur:', error)
+        // On garde les paramètres par défaut en cas d'erreur
+      }
+    }
+    
+    if (id) {
+      fetchRelease()
+    }
+  }, [id])
+  
+  // Simuler le progrès audio
+  useEffect(() => {
+    let interval: NodeJS.Timeout | undefined
+
+    if (currentlyPlaying && audioDuration > 0) {
+      interval = setInterval(() => {
+        setAudioProgress(prev => {
+          if (prev >= audioDuration) {
+            setCurrentlyPlaying(false)
+            return 0
+          }
+          return prev + 1
+        })
+      }, 1000)
+    } else if (!currentlyPlaying) {
+      if (interval) clearInterval(interval)
+    }
+
+    return () => {
+      if (interval) clearInterval(interval)
+    }
+  }, [currentlyPlaying, audioDuration])
+  
+  // Générer le QR Code
+  const generateQRCode = async () => {
+    setIsGeneratingQR(true)
+    
+    try {
+      // Simuler l'appel API
+      await new Promise(resolve => setTimeout(resolve, 1000))
+      
+      // Générer un QR code via une API publique pour la démo
+      const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(smartLinkUrl)}`
+      setQrCodeUrl(qrUrl)
+      
+      toast.success("QR Code généré avec succès")
+    } catch (error) {
+      console.error('Erreur:', error)
+      toast.error("Impossible de générer le QR Code")
+    } finally {
+      setIsGeneratingQR(false)
+    }
+  }
+  
+  // Télécharger le QR Code
+  const downloadQRCode = () => {
+    if (!qrCodeUrl) return
+    
+    const link = document.createElement('a')
+    link.href = qrCodeUrl
+    link.download = `${release?.title.replace(/\s+/g, '_') || 'smartlink'}_qrcode.png`
+    link.click()
+  }
+  
+  // Copier le lien
+  const copySmartLink = () => {
+    navigator.clipboard.writeText(smartLinkUrl)
+    setCopied(true)
+    toast.success("Lien copié !")
+    
+    setTimeout(() => {
+      setCopied(false)
+    }, 2000)
+  }
+  
+  // Partager le lien
+  const shareTo = (platform: 'twitter' | 'facebook' | 'instagram') => {
+    if (!release) return
+    
+    let shareUrl = ""
+    const text = encodeURIComponent(`Écoutez "${release.title}" par ${release.artist.name} sur toutes les plateformes !`)
+    
+    switch (platform) {
+      case 'twitter':
+        shareUrl = `https://twitter.com/intent/tweet?text=${text}&url=${encodeURIComponent(smartLinkUrl)}`
+        break
+      case 'facebook':
+        shareUrl = `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(smartLinkUrl)}`
+        break
+      case 'instagram':
+        // Instagram ne peut pas être partagé directement par URL, donc on copie le lien
+        navigator.clipboard.writeText(smartLinkUrl)
+        toast.success("Lien copié ! Collez-le dans votre story Instagram")
+        return
+    }
+    
+    if (shareUrl) {
+      window.open(shareUrl, '_blank', 'width=600,height=400')
+    }
+  }
+  
+  // Contrôle de la lecture audio
+  const togglePlayback = () => {
+    setCurrentlyPlaying(!currentlyPlaying)
+    
+    // Dans une implémentation réelle, ici on contrôlerait la lecture audio
+    if (audioRef.current) {
+      if (currentlyPlaying) {
+        audioRef.current.pause()
+      } else {
+        audioRef.current.play().catch(error => {
+          console.error('Erreur lors de la lecture audio:', error)
+        })
+      }
+    }
+  }
+
+  // Formater le temps audio
+  const formatTime = (seconds: number) => {
+    const mins = Math.floor(seconds / 60)
+    const secs = Math.floor(seconds % 60)
+    return `${mins}:${secs.toString().padStart(2, '0')}`
+  }
+
+  // Toggle mute
+  const toggleMute = () => {
+    setIsMuted(!isMuted)
+    if (audioRef.current) {
+      audioRef.current.muted = !isMuted
+    }
+  }
+  
+  // Sauvegarder les liens des plateformes
+  const saveSmartLink = async () => {
+    if (!release) return
+    
+    setIsSubmitting(true)
+    
+    try {
+      // Simuler l'appel API
+      await new Promise(resolve => setTimeout(resolve, 1200))
+      
+      // Sauvegarder les paramètres si on est sur l'onglet paramètres
+      if (currentTab === 'settings') {
+        await saveSettings()
+      }
+      
+      toast.success("SmartLink sauvegardé avec succès")
+      setEditMode(false)
+    } catch (error) {
+      console.error('Erreur:', error)
+      toast.error("Impossible de sauvegarder les liens")
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
+  
+  // Sauvegarder les paramètres
+  const saveSettings = async () => {
+    try {
+      // Simuler l'appel API
+      await new Promise(resolve => setTimeout(resolve, 800))
+      
+      toast.success("Paramètres sauvegardés avec succès")
+    } catch (error) {
+      console.error('Erreur:', error)
+      toast.error("Impossible de sauvegarder les paramètres")
+      throw error // Re-throw pour que saveSmartLink puisse le capturer
+    }
+  }
+  
+  // Mise à jour d'un lien de plateforme
+  const updatePlatformLink = (platform: string, url: string) => {
+    setPlatformLinks(prev => ({
+      ...prev,
+      [platform]: url
+    }))
+  }
+  
+  // Mise à jour d'un paramètre
+  const updateSetting = (key: keyof SmartLinkSettings, value: any) => {
+    setSettings(prev => ({
+      ...prev,
+      [key]: value
+    }))
+  }
+  
+  // Voir l'aperçu du SmartLink
+  const viewPreview = () => {
+    window.open(`/l/${id}`, '_blank')
+  }
+  
+  // Mettre à jour l'URL personnalisée
+  const updateCustomUrl = () => {
+    if (customLinkSlug) {
+      const baseUrl = window.location.origin
+      const newUrl = `${baseUrl}/l/${customLinkSlug}`
+      setSmartLinkUrl(newUrl)
+      toast.success("URL personnalisée mise à jour")
+    }
+  }
+
+  // Basculer l'affichage des paroles
+  const toggleLyrics = () => {
+    setShowLyrics(!showLyrics)
+  }
+  
+  // Si chargement
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-[60vh]">
+        <div className="flex flex-col items-center gap-4">
+          <Loader2 className="w-10 h-10 text-red-500 animate-spin" />
+          <p className="text-zinc-400">Chargement du SmartLink...</p>
+        </div>
+      </div>
+    )
+  }
+  
+  // Si aucune release trouvée
+  if (!release) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[60vh] p-4">
+        <div className="text-center space-y-3">
+          <X className="w-16 h-16 text-red-500 mx-auto" />
+          <h2 className="text-xl font-bold text-white">Release introuvable</h2>
+          <p className="text-zinc-400 max-w-md mx-auto">
+            Impossible de trouver cette release ou elle n'est pas encore disponible.
+          </p>
+          <button
+            onClick={() => router.push('/dashboard/distribution')}
+            className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-white rounded-lg transition-colors inline-flex items-center gap-2 mt-3"
+          >
+            <ArrowLeft className="w-5 h-5" />
+            Retour à la liste
+          </button>
+        </div>
+      </div>
+    )
+  }
+  
+  // Rendu des différents onglets
+  const renderTabContent = () => {
+    switch (currentTab) {
+      case 'links':
+        return renderLinksTab()
+      case 'stats':
+        return renderStatsTab()
+      case 'settings':
+        return renderSettingsTab()
+      default:
+        return renderLinksTab()
+    }
+  }
+  
+  // Onglet des liens
+  const renderLinksTab = () => {
+    // Plateformes visibles (en fonction du toggle)
+    const visiblePlatforms = showAllPlatforms 
+      ? Object.entries(PLATFORM_CONFIG)
+      : Object.entries(PLATFORM_CONFIG).slice(0, 4)
+      
+    return (
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        {/* Colonne de gauche - Aperçu du SmartLink */}
+        <div className="lg:col-span-2">
+          <div className="bg-zinc-900/50 border border-zinc-800 rounded-xl overflow-hidden">
+            <div className="p-6 border-b border-zinc-800 flex justify-between items-center">
+              <h2 className="text-xl font-semibold text-white">Aperçu du SmartLink</h2>
+              
+              {/* Compteur de vues */}
+              {stats && (
+                <div className="text-sm flex items-center gap-2 text-zinc-400">
+                  <Eye className="w-4 h-4" />
+                  <span>{stats.views} vues</span>
+                </div>
+              )}
+            </div>
+            
+            <div className="p-6">
+              <div className="max-w-3xl mx-auto">
+                {/* En-tête avec cover */}
+                <div className="flex flex-col md:flex-row gap-6 items-center mb-8">
+                  <div className="w-40 h-40 rounded-xl overflow-hidden flex-shrink-0 bg-zinc-800">
+                    {release.artwork?.cover ? (
+                      <img 
+                        src={release.artwork.cover} 
+                        alt={release.title} 
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center">
+                        <Music className="w-12 h-12 text-zinc-600" />
+                      </div>
+                    )}
+                  </div>
+                  
+                  <div className="text-center md:text-left flex-1">
+                    <h3 className="text-2xl font-bold text-white">{release.title}</h3>
+                    <p className="text-zinc-400 text-lg mt-1">{release.artist.name}</p>
+                    
+                    {/* Date de sortie (si activée) */}
+                    {settings.showReleaseDate && (
+                      <p className="text-zinc-500 text-sm mt-1 flex items-center gap-1 justify-center md:justify-start">
+                        <Calendar className="w-4 h-4" />
+                        {new Date(release.releaseDate).toLocaleDateString()}
+                      </p>
+                    )}
+                    
+                    <div className="flex flex-wrap gap-2 mt-3 justify-center md:justify-start">
+                      <button
+                        onClick={togglePlayback}
+                        className="px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded-full transition-colors flex items-center gap-2"
+                      >
+                        {currentlyPlaying ? (
+                          <>
+                            <PauseCircle className="w-5 h-5" />
+                            Pause
+                          </>
+                        ) : (
+                          <>
+                            <PlayCircle className="w-5 h-5" />
+                            Écouter
+                          </>
+                        )}
+                      </button>
+                      
+                      <button
+                        onClick={copySmartLink}
+                        className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-white rounded-full transition-colors flex items-center gap-2"
+                      >
+                        <Share2 className="w-5 h-5" />
+                        Partager
+                      </button>
+                      
+                      <button
+                        onClick={toggleLyrics}
+                        className={`px-4 py-2 ${
+                          showLyrics 
+                            ? 'bg-blue-500 hover:bg-blue-600' 
+                            : 'bg-zinc-800 hover:bg-zinc-700'
+                        } text-white rounded-full transition-colors flex items-center gap-2`}
+                      >
+                        <MessageSquare className="w-5 h-5" />
+                        Paroles
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                
+                {/* Barre de progression audio */}
+                {currentlyPlaying && (
+                  <div className="mb-6">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-xs text-zinc-500">{formatTime(audioProgress)}</span>
+                      <div className="flex items-center gap-2">
+                        <button 
+                          onClick={toggleMute}
+                          className="text-zinc-400 hover:text-white"
+                        >
+                          {isMuted ? (
+                            <VolumeX className="w-4 h-4" />
+                          ) : (
+                            <Volume2 className="w-4 h-4" />
+                          )}
+                        </button>
+                        <span className="text-xs text-zinc-500">{formatTime(audioDuration)}</span>
+                      </div>
+                    </div>
+                    <div className="h-1.5 w-full bg-zinc-800 rounded-full overflow-hidden">
+                      <div 
+                        className="h-full bg-red-500 rounded-full"
+                        style={{ width: `${(audioProgress / audioDuration) * 100}%` }}
+                      />
+                    </div>
+                  </div>
+                )}
+                
+                {/* Paroles */}
+                <AnimatePresence>
+                  {showLyrics && (
+                    <motion.div
+                      initial={{ opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: "auto" }}
+                      exit={{ opacity: 0, height: 0 }}
+                      transition={{ duration: 0.3 }}
+                      className="mb-6 overflow-hidden"
+                    >
+                      <div className="bg-zinc-800 rounded-lg p-4 h-48 overflow-y-auto">
+                        <h4 className="font-medium text-white mb-2">Paroles</h4>
+                        {release.tracks[0]?.lyrics ? (
+                          <pre className="text-sm text-zinc-300 whitespace-pre-wrap font-sans">
+                            {release.tracks[0].lyrics}
+                          </pre>
+                        ) : (
+                          <p className="text-zinc-500 text-center mt-6">Paroles non disponibles</p>
+                        )}
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+                
+                {/* Liste des plateformes */}
+                <div className="space-y-3">
+                  <h4 className="text-lg font-medium text-white mb-4">Écouter sur</h4>
+                  
+                  <div className="space-y-2">
+                    {visiblePlatforms.map(([platformId, platformConfig]) => {
+                      const { name, icon, color, textColor } = platformConfig
+                      const link = platformLinks[platformId] || '#'
+                      
+                      return (
+                        <a 
+                          key={platformId}
+                          href={link}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className={`flex items-center justify-between p-3 rounded-lg ${color} ${textColor} hover:opacity-90 transition-opacity`}
+                        >
+                          <div className="flex items-center gap-3">
+                            <div className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center">
+                              <img 
+                                src={icon} 
+                                alt={name} 
+                                className="w-5 h-5 object-contain"
+                              />
+                            </div>
+                            <span>{name}</span>
+                          </div>
+                          <ExternalLink className="w-5 h-5" />
+                        </a>
+                      )
+                    })}
+                    
+                    {/* Bouton pour afficher plus de plateformes */}
+                    {Object.keys(PLATFORM_CONFIG).length > 4 && (
+                      <button
+                        onClick={() => setShowAllPlatforms(!showAllPlatforms)}
+                        className="w-full p-3 bg-zinc-800 hover:bg-zinc-700 text-white rounded-lg transition-colors flex items-center justify-center gap-1"
+                      >
+                        {showAllPlatforms ? (
+                          <>
+                            <ChevronUp className="w-5 h-5" />
+                            Afficher moins
+                          </>
+                        ) : (
+                          <>
+                            <ChevronDown className="w-5 h-5" />
+                            Voir {Object.keys(PLATFORM_CONFIG).length - 4} plateformes de plus
+                          </>
+                        )}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        {/* Colonne de droite - Configuration des liens */}
+        <div className="space-y-6">
+          {/* URL du SmartLink */}
+          <div className="bg-zinc-900/50 border border-zinc-800 rounded-xl p-6">
+            <h3 className="text-lg font-medium text-white mb-4">URL du SmartLink</h3>
+            
+            <div className="space-y-4">
+              <div className="flex items-center gap-2">
+                <div className="flex-1 px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white truncate">
+                  {smartLinkUrl}
+                </div>
+                <button
+                  onClick={copySmartLink}
+                  className="p-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-white rounded-lg transition-colors"
+                >
+                  {copied ? (
+                    <Check className="w-5 h-5 text-green-500" />
+                  ) : (
+                    <Copy className="w-5 h-5" />
+                  )}
+                </button>
+              </div>
+              
+              {editMode && (
+                <div className="space-y-2">
+                  <label className="text-sm text-zinc-400">Personnaliser l'URL</label>
+                  <div className="flex items-center gap-2">
+                    <div className="text-zinc-500 text-sm whitespace-nowrap">
+                      {window.location.origin}/l/
+                    </div>
+                    <input
+                      type="text"
+                      value={customLinkSlug}
+                      onChange={(e) => setCustomLinkSlug(e.target.value)}
+                      className="flex-1 px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:border-red-500 focus:outline-none"
+                      placeholder="mon-titre"
+                    />
+                   <button
+                        onClick={updateCustomUrl}
+                        className="px-2 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-white rounded-lg transition-colors"
+                      >
+                        <Save className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          
+            {/* QR Code */}
+            <div className="bg-zinc-900/50 border border-zinc-800 rounded-xl p-6 mt-6">
+              <h3 className="text-lg font-medium text-white mb-4">QR Code</h3>
+              
+              <div className="flex flex-col items-center">
+                {qrCodeUrl ? (
+                  <div className="p-4 bg-white rounded-lg mb-4">
+                    <img 
+                      src={qrCodeUrl} 
+                      alt="QR Code" 
+                      className="w-40 h-40 object-contain"
+                    />
+                  </div>
+                ) : (
+                  <div className="w-40 h-40 bg-zinc-800 rounded-lg flex items-center justify-center mb-4">
+                    <QrCode className="w-16 h-16 text-zinc-600" />
+                  </div>
+                )}
+                
+                <div className="flex gap-2 w-full">
+                  <button
+                    onClick={generateQRCode}
+                    disabled={isGeneratingQR}
+                    className="flex-1 p-2 bg-zinc-800 hover:bg-zinc-700 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm flex items-center justify-center gap-1"
+                  >
+                    {isGeneratingQR ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        Génération...
+                      </>
+                    ) : qrCodeUrl ? (
+                      <>
+                        <RefreshCw className="w-4 h-4" />
+                        Regénérer
+                      </>
+                    ) : (
+                      <>
+                        <QrCode className="w-4 h-4" />
+                        Générer
+                      </>
+                    )}
+                  </button>
+                  
+                  {qrCodeUrl && (
+                    <button
+                      onClick={downloadQRCode}
+                      className="p-2 bg-zinc-800 hover:bg-zinc-700 text-white rounded-lg transition-colors flex items-center justify-center"
+                    >
+                      <Download className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+            
+            {/* Partage sur les réseaux sociaux */}
+            <div className="bg-zinc-900/50 border border-zinc-800 rounded-xl p-6 mt-6">
+              <h3 className="text-lg font-medium text-white mb-4">Partager sur les réseaux</h3>
+              
+              <div className="flex flex-wrap gap-3 justify-center">
+                <button
+                  onClick={() => shareTo('twitter')}
+                  className="p-3 bg-[#1DA1F2] text-white rounded-lg hover:opacity-90 transition-opacity flex items-center gap-2"
+                >
+                  <Twitter className="w-5 h-5" />
+                  Twitter
+                </button>
+                <button
+                  onClick={() => shareTo('facebook')}
+                  className="p-3 bg-[#4267B2] text-white rounded-lg hover:opacity-90 transition-opacity flex items-center gap-2"
+                >
+                  <Facebook className="w-5 h-5" />
+                  Facebook
+                </button>
+                <button
+                  onClick={() => shareTo('instagram')}
+                  className="p-3 bg-gradient-to-r from-[#833AB4] via-[#FD1D1D] to-[#FCAF45] text-white rounded-lg hover:opacity-90 transition-opacity flex items-center gap-2"
+                >
+                  <Instagram className="w-5 h-5" />
+                  Instagram
+                </button>
+              </div>
+            </div>
+          </div>
+        
+        
+        
+         {/* Onglet de navigation */}
+
+        <div className="border-b border-zinc-800 mb-6">
+          <nav className="flex space-x-6">
+            <button
+              onClick={() => setCurrentTab('links')}
+              className={`pb-3 relative ${
+                currentTab === 'links' 
+                  ? 'text-white border-b-2 border-red-500' 
+                  : 'text-zinc-400 hover:text-zinc-300'
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                <Link className="w-4 h-4" />
+                <span>Liens</span>
+              </div>
+            </button>
+            
+            <button
+              onClick={() => setCurrentTab('stats')}
+              className={`pb-3 relative ${
+                currentTab === 'stats' 
+                  ? 'text-white border-b-2 border-red-500' 
+                  : 'text-zinc-400 hover:text-zinc-300'
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                <BarChart2 className="w-4 h-4" />
+                <span>Statistiques</span>
+              </div>
+            </button>
+            
+            <button
+              onClick={() => setCurrentTab('settings')}
+              className={`pb-3 relative ${
+                currentTab === 'settings' 
+                  ? 'text-white border-b-2 border-red-500' 
+                  : 'text-zinc-400 hover:text-zinc-300'
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                <Settings className="w-4 h-4" />
+                <span>Paramètres</span>
+              </div>
+            </button>
+          </nav>
+        </div>
+        
+        {/* Contenu des onglets */}
+        {renderTabContent()}
+        
+        {/* Boutons d'action */}
+        <div className="flex justify-between mt-8">
+          <div className="flex items-center gap-3">
+            {!editMode && (
+              <button
+                onClick={() => setEditMode(true)}
+                className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-white rounded-lg transition-colors flex items-center gap-2"
+              >
+                <Edit className="w-5 h-5" />
+                Modifier
+              </button>
+            )}
+            
+            <button
+              onClick={viewPreview}
+              className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-white rounded-lg transition-colors flex items-center gap-2"
+            >
+              <Eye className="w-5 h-5" />
+              Prévisualiser
+            </button>
+          </div>
+          
+          {editMode && (
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => setEditMode(false)}
+                className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-white rounded-lg transition-colors"
+              >
+                Annuler
+              </button>
+              
+              <button
+                onClick={saveSmartLink}
+                disabled={isSubmitting}
+                className="px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isSubmitting ? (
+                  <>
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                    Sauvegarde...
+                  </>
+                ) : (
+                  <>
+                    <Save className="w-5 h-5" />
+                    Enregistrer
+                  </>
+                )}
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+  )
+  
+  // Onglet des statistiques
+  const renderStatsTab = () => {
+    if (!stats) {
+      return (
+        <div className="text-center p-8 border border-zinc-800 rounded-lg">
+          <Loader2 className="w-10 h-10 text-zinc-600 mx-auto animate-spin" />
+          <p className="text-zinc-400 mt-4">Chargement des statistiques...</p>
+        </div>
+      )
+    }
+    
+    return (
+      <div>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="p-6 bg-zinc-900/50 border border-zinc-800 rounded-xl">
+            <h3 className="text-lg font-medium text-white mb-2">Vues totales</h3>
+            <p className="text-3xl font-bold text-white">{stats.views.toLocaleString()}</p>
+            <p className="text-sm text-zinc-500 mt-1">Visiteurs uniques</p>
+          </div>
+          
+          <div className="p-6 bg-zinc-900/50 border border-zinc-800 rounded-xl">
+            <h3 className="text-lg font-medium text-white mb-2">Clics</h3>
+            <p className="text-3xl font-bold text-white">{stats.clicks.toLocaleString()}</p>
+            <p className="text-sm text-zinc-500 mt-1">Redirection vers les plateformes</p>
+          </div>
+          
+          <div className="p-6 bg-zinc-900/50 border border-zinc-800 rounded-xl">
+            <h3 className="text-lg font-medium text-white mb-2">Taux de conversion</h3>
+            <p className="text-3xl font-bold text-white">{stats.conversionRate}%</p>
+            <p className="text-sm text-zinc-500 mt-1">Pourcentage de vues qui génèrent un clic</p>
+          </div>
+        </div>
+        
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
+          {/* Statistiques par plateforme */}
+          <div className="bg-zinc-900/50 border border-zinc-800 rounded-xl p-6">
+            <h3 className="text-lg font-medium text-white mb-4">Clics par plateforme</h3>
+            
+            <div className="space-y-4">
+              {Object.entries(stats.platformClicks)
+                .sort((a, b) => b[1] - a[1])
+                .map(([platform, clicks]) => {
+                  const platformConfig = PLATFORM_CONFIG[platform as keyof typeof PLATFORM_CONFIG]
+                  if (!platformConfig) return null
+                  
+                  const percentage = (clicks / stats.clicks) * 100
+                  
+                  return (
+                    <div key={platform} className="space-y-1">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <div className={`w-6 h-6 rounded-full ${platformConfig.color} flex items-center justify-center`}>
+                            <img 
+                              src={platformConfig.icon} 
+                              alt={platformConfig.name} 
+                              className="w-3 h-3 object-contain"
+                            />
+                          </div>
+                          <span className="text-zinc-300">{platformConfig.name}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-white font-medium">{clicks}</span>
+                          <span className="text-xs text-zinc-500">({percentage.toFixed(1)}%)</span>
+                        </div>
+                      </div>
+                      <div className="w-full h-2 bg-zinc-800 rounded-full overflow-hidden">
+                        <div 
+                          className={`h-full ${platformConfig.color}`}
+                          style={{ width: `${percentage}%` }}
+                        />
+                      </div>
+                    </div>
+                  )
+                })}
+            </div>
+          </div>
+          
+          {/* Historique des visites */}
+          <div className="bg-zinc-900/50 border border-zinc-800 rounded-xl p-6">
+            <h3 className="text-lg font-medium text-white mb-4">Historique des visites</h3>
+            
+            <div className="h-64 flex items-center justify-center bg-zinc-800/50 rounded-lg">
+              <p className="text-zinc-500">Graphique d'historique non disponible en mode démo.</p>
+            </div>
+          </div>
+        </div>
+        
+        <div className="bg-zinc-900/50 border border-zinc-800 rounded-xl p-6 mt-6">
+          <h3 className="text-lg font-medium text-white mb-4">Sources de trafic</h3>
+          
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="p-4 bg-zinc-800 rounded-lg">
+              <h4 className="text-sm font-medium text-zinc-400">Direct</h4>
+              <p className="text-xl font-bold text-white mt-1">45%</p>
+            </div>
+            <div className="p-4 bg-zinc-800 rounded-lg">
+              <h4 className="text-sm font-medium text-zinc-400">Instagram</h4>
+              <p className="text-xl font-bold text-white mt-1">28%</p>
+            </div>
+            <div className="p-4 bg-zinc-800 rounded-lg">
+              <h4 className="text-sm font-medium text-zinc-400">Twitter</h4>
+              <p className="text-xl font-bold text-white mt-1">15%</p>
+            </div>
+            <div className="p-4 bg-zinc-800 rounded-lg">
+              <h4 className="text-sm font-medium text-zinc-400">Autres</h4>
+              <p className="text-xl font-bold text-white mt-1">12%</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+  
+  // Onglet des paramètres
+  const renderSettingsTab = () => {
+    return (
+      <div className="space-y-6">
+        <div className="bg-zinc-900/50 border border-zinc-800 rounded-xl p-6">
+          <h3 className="text-lg font-medium text-white mb-4">Personnalisation</h3>
+          
+          <div className="space-y-4">
+            {/* Autoplay */}
+            <div className="flex items-center justify-between">
+              <div>
+                <label className="text-white font-medium">Lecture automatique</label>
+                <p className="text-sm text-zinc-400">Lancer la lecture audio automatiquement</p>
+              </div>
+              <div>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input 
+                    type="checkbox" 
+                    className="sr-only peer"
+                    checked={settings.autoplay}
+                    onChange={(e) => updateSetting('autoplay', e.target.checked)}
+                    disabled={!editMode}
+                  />
+                  <div className={`w-11 h-6 rounded-full peer ${
+                    editMode ? 'bg-zinc-700 peer-checked:bg-red-500' : 'bg-zinc-800 peer-checked:bg-red-600'
+                  } peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all`}></div>
+                </label>
+              </div>
+            </div>
+            
+            {/* Afficher date de sortie */}
+            <div className="flex items-center justify-between">
+              <div>
+                <label className="text-white font-medium">Date de sortie</label>
+                <p className="text-sm text-zinc-400">Afficher la date de sortie sur le SmartLink</p>
+              </div>
+              <div>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input 
+                    type="checkbox" 
+                    className="sr-only peer"
+                    checked={settings.showReleaseDate}
+                    onChange={(e) => updateSetting('showReleaseDate', e.target.checked)}
+                    disabled={!editMode}
+                  />
+                  <div className={`w-11 h-6 rounded-full peer ${
+                    editMode ? 'bg-zinc-700 peer-checked:bg-red-500' : 'bg-zinc-800 peer-checked:bg-red-600'
+                  } peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all`}></div>
+                </label>
+              </div>
+            </div>
+            
+            {/* Afficher paroles */}
+            <div className="flex items-center justify-between">
+              <div>
+                <label className="text-white font-medium">Paroles</label>
+                <p className="text-sm text-zinc-400">Permettre l'affichage des paroles</p>
+              </div>
+              <div>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input 
+                    type="checkbox" 
+                    className="sr-only peer"
+                    checked={settings.showLyrics}
+                    onChange={(e) => updateSetting('showLyrics', e.target.checked)}
+                    disabled={!editMode}
+                  />
+                  <div className={`w-11 h-6 rounded-full peer ${
+                    editMode ? 'bg-zinc-700 peer-checked:bg-red-500' : 'bg-zinc-800 peer-checked:bg-red-600'
+                  } peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all`}></div>
+                </label>
+              </div>
+            </div>
+            
+            {/* Ordre personnalisé des pistes */}
+            <div className="flex items-center justify-between">
+              <div>
+                <label className="text-white font-medium">Ordre des pistes personnalisé</label>
+                <p className="text-sm text-zinc-400">Réorganiser l'ordre d'affichage des pistes</p>
+              </div>
+              <div>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input 
+                    type="checkbox" 
+                    className="sr-only peer"
+                    checked={settings.customTrackOrder}
+                    onChange={(e) => updateSetting('customTrackOrder', e.target.checked)}
+                    disabled={!editMode}
+                  />
+                  <div className={`w-11 h-6 rounded-full peer ${
+                    editMode ? 'bg-zinc-700 peer-checked:bg-red-500' : 'bg-zinc-800 peer-checked:bg-red-600'
+                  } peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all`}></div>
+                </label>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <div className="bg-zinc-900/50 border border-zinc-800 rounded-xl p-6">
+          <h3 className="text-lg font-medium text-white mb-4">Analytiques</h3>
+          
+          <div className="space-y-4">
+            {/* Activer analytiques */}
+            <div className="flex items-center justify-between">
+              <div>
+                <label className="text-white font-medium">Suivi des statistiques</label>
+                <p className="text-sm text-zinc-400">Collecter des données d'utilisation anonymes</p>
+              </div>
+              <div>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input 
+                    type="checkbox" 
+                    className="sr-only peer"
+                    checked={settings.analyticsEnabled}
+                    onChange={(e) => updateSetting('analyticsEnabled', e.target.checked)}
+                    disabled={!editMode}
+                  />
+                  <div className={`w-11 h-6 rounded-full peer ${
+                    editMode ? 'bg-zinc-700 peer-checked:bg-red-500' : 'bg-zinc-800 peer-checked:bg-red-600'
+                  } peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all`}></div>
+                </label>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <div className="bg-zinc-900/50 border border-zinc-800 rounded-xl p-6">
+          <h3 className="text-lg font-medium text-white mb-4">Personnalisation avancée</h3>
+          
+          <div className="space-y-4">
+            {/* Domaine personnalisé */}
+            <div>
+              <label className="block text-white font-medium mb-1">Domaine personnalisé</label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={settings.customDomain}
+                  onChange={(e) => updateSetting('customDomain', e.target.value)}
+                  placeholder="yourband.com"
+                  className="flex-1 px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:border-red-500 focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
+                  disabled={!editMode}
+                />
+                {editMode && (
+                  <button
+                    onClick={() => {
+                      if (settings.customDomain) {
+                        toast.success("Domaine en cours de vérification...")
+                      } else {
+                        toast.error("Veuillez entrer un domaine valide")
+                      }
+                    }}
+                    className="px-3 py-2 bg-zinc-800 hover:bg-zinc-700 text-white rounded-lg transition-colors"
+                  >
+                    Vérifier
+                  </button>
+                )}
+              </div>
+              <p className="text-xs text-zinc-500 mt-1">
+                Nécessite une configuration DNS (CNAME) pour fonctionner
+              </p>
+            </div>
+            
+            {/* Couleurs personnalisées */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+              <div>
+                <label className="block text-white font-medium mb-1">Couleur de fond</label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="color"
+                    value={settings.customBgColor}
+                    onChange={(e) => updateSetting('customBgColor', e.target.value)}
+                    className="w-10 h-10 rounded-lg border border-zinc-700 overflow-hidden bg-transparent cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                    disabled={!editMode}
+                  />
+                  <input
+                    type="text"
+                    value={settings.customBgColor}
+                    onChange={(e) => updateSetting('customBgColor', e.target.value)}
+                    className="flex-1 px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:border-red-500 focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
+                    disabled={!editMode}
+                  />
+                </div>
+              </div>
+              
+              <div>
+                <label className="block text-white font-medium mb-1">Couleur du texte</label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="color"
+                    value={settings.customTextColor}
+                    onChange={(e) => updateSetting('customTextColor', e.target.value)}
+                    className="w-10 h-10 rounded-lg border border-zinc-700 overflow-hidden bg-transparent cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                    disabled={!editMode}
+                  />
+                  <input
+                    type="text"
+                    value={settings.customTextColor}
+                    onChange={(e) => updateSetting('customTextColor', e.target.value)}
+                    className="flex-1 px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:border-red-500 focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
+                    disabled={!editMode}
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+  
+  // Onglet des liens (pour l'édition des liens)
+  const renderLinksTab = () => {
+    // Plateformes visibles (toutes en mode édition)
+    const visiblePlatforms = Object.entries(PLATFORM_CONFIG).sort((a, b) => a[1].order - b[1].order)
+    
+    return (
+      <div className="space-y-4">
+        {editMode ? (
+          // Mode édition
+          <div className="bg-zinc-900/50 border border-zinc-800 rounded-xl p-6">
+            <h3 className="text-lg font-medium text-white mb-4">Liens des plateformes</h3>
+            
+            <div className="space-y-4">
+              {visiblePlatforms.map(([platformId, platformConfig]) => (
+                <div key={platformId} className="flex items-center gap-3">
+                  <div className={`w-10 h-10 rounded-lg ${platformConfig.color} flex items-center justify-center flex-shrink-0`}>
+                    <img 
+                      src={platformConfig.icon} 
+                      alt={platformConfig.name} 
+                      className="w-6 h-6 object-contain"
+                    />
+                  </div>
+                  
+                  <div className="flex-1 min-w-0">
+                    <input
+                      type="text"
+                      value={platformLinks[platformId] || ''}
+                      onChange={(e) => updatePlatformLink(platformId, e.target.value)}
+                      placeholder={`URL ${platformConfig.name}`}
+                      className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-red-500"
+                    />
+                  </div>
+                  
+                  <div className="flex-shrink-0">
+                    {platformLinks[platformId] ? (
+                      <div className="w-8 h-8 rounded-full bg-green-500/10 flex items-center justify-center text-green-500">
+                        <Check className="w-5 h-5" />
+                      </div>
+                    ) : (
+                      <div className="w-8 h-8 rounded-full bg-zinc-800 flex items-center justify-center text-zinc-500">
+                        <X className="w-5 h-5" />
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : (
+          // Mode lecture
+          <div className="bg-zinc-900/50 border border-zinc-800 rounded-xl p-6">
+            <h3 className="text-lg font-medium text-white mb-4">Liens des plateformes</h3>
+            
+            <div className="space-y-3">
+              {visiblePlatforms
+                .filter(([platformId]) => platformLinks[platformId])
+                .map(([platformId, platformConfig]) => (
+                  <div key={platformId} className="flex items-center justify-between p-3 bg-zinc-800 rounded-lg">
+                    <div className="flex items-center gap-3">
+                      <div className={`w-8 h-8 rounded-full ${platformConfig.color} flex items-center justify-center`}>
+                        <img 
+                          src={platformConfig.icon} 
+                          alt={platformConfig.name} 
+                          className="w-5 h-5 object-contain"
+                        />
+                      </div>
+                      <span className="text-white">{platformConfig.name}</span>
+                    </div>
+                    
+                    
+                      <a href={platformLinks[platformId]}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="p-2 bg-zinc-700 hover:bg-zinc-600 text-zinc-300 rounded-lg transition-colors"
+                    >
+                      <ExternalLink className="w-4 h-4" />
+                    </a>
+                  </div>
+                ))}
+              
+              {Object.values(platformLinks).filter(Boolean).length === 0 && (
+                <div className="text-center p-4">
+                  <p className="text-zinc-500">Aucun lien de plateforme configuré</p>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+        
+        <div className="bg-zinc-900/50 border border-zinc-800 rounded-xl p-6">
+          <div className="flex items-start gap-3">
+            <div className="p-2 rounded-full bg-amber-500/10">
+              <Info className="w-5 h-5 text-amber-500" />
+            </div>
+            <div>
+              <h4 className="font-medium text-white">Liens vers les plateformes</h4>
+              <p className="mt-1 text-sm text-zinc-400">
+                Les liens de plateformes permettent de rediriger vos fans vers votre musique sur leurs plateformes préférées.
+                Vous pouvez obtenir ces liens une fois que votre musique est distribuée et disponible sur les plateformes.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+}
+// Audio player hidden pour la lecture
+return (
+  <div className="p-4 sm:p-6 lg:p-8 space-y-8">
+    {/* En-tête */}
+    <div className="flex items-center justify-between">
+      <div className="flex items-center gap-3">
+        <button
+          onClick={() => router.push(`/dashboard/distribution/${id}`)}
+          className="p-2 rounded-full bg-zinc-900 hover:bg-zinc-800 transition-colors"
+        >
+          <ArrowLeft className="w-5 h-5 text-zinc-400" />
+        </button>
+        <h1 className="text-xl sm:text-2xl font-bold text-white">SmartLink</h1>
+      </div>
+      
+      {release.status === ReleaseStatus.LIVE ? (
+        <span className="px-3 py-1.5 rounded-full bg-green-500/10 text-green-500 text-sm flex items-center gap-1">
+          <CheckCircle2 className="w-4 h-4" />
+          En ligne
+        </span>
+      ) : (
+        <span className="px-3 py-1.5 rounded-full bg-amber-500/10 text-amber-500 text-sm flex items-center gap-1">
+          <Clock className="w-4 h-4" />
+          {release.status === ReleaseStatus.PROCESSING ? 'En distribution' : 'Non publié'}
+        </span>
+      )}
+    </div>
+    
+    {/* Contenu principal */}
+    {renderTabContent()}
+    
+    {/* Lecteur audio caché */}
+    <audio ref={audioRef} className="hidden" onEnded={() => setCurrentlyPlaying(false)} />
+    
+    {/* Aperçu du SmartLink (modal) */}
+    <AnimatePresence>
+      {showPreview && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4"
+          onClick={() => setShowPreview(false)}
+        >
+          <motion.div
+            initial={{ scale: 0.9, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            exit={{ scale: 0.9, opacity: 0 }}
+            onClick={e => e.stopPropagation()}
+            className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-auto max-w-lg w-full max-h-[90vh] p-6"
+            style={{
+              backgroundColor: settings.customBgColor,
+              color: settings.customTextColor
+            }}
+          >
+            <div className="flex justify-end mb-4">
+              <button 
+                onClick={() => setShowPreview(false)}
+                className="p-2 rounded-full bg-black/20 text-white hover:bg-black/40 transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            
+            <div className="text-center">
+              <img 
+                src={release.artwork?.cover} 
+                alt={release.title}
+                className="w-40 h-40 mx-auto rounded-lg object-cover mb-4"
+              />
+              
+              <h2 className="text-xl font-bold mb-1" style={{ color: settings.customTextColor }}>
+                {release.title}
+              </h2>
+              <p style={{ color: `${settings.customTextColor}99` }}>
+                {release.artist.name}
+              </p>
+              
+              {settings.showReleaseDate && (
+                <p className="text-sm mt-1 opacity-70" style={{ color: `${settings.customTextColor}77` }}>
+                  {new Date(release.releaseDate).toLocaleDateString()}
+                </p>
+              )}
+              
+              <div className="flex justify-center gap-3 mt-4">
+                <button
+                  className="px-4 py-2 bg-red-500 text-white rounded-full flex items-center gap-1"
+                >
+                  <PlayCircle className="w-4 h-4" />
+                  Play
+                </button>
+                
+                {settings.showLyrics && (
+                  <button
+                    className="px-4 py-2 bg-zinc-800 text-white rounded-full flex items-center gap-1"
+                  >
+                    <MessageSquare className="w-4 h-4" />
+                    Paroles
+                  </button>
+                )}
+              </div>
+              
+              <div className="mt-6 space-y-2">
+                {Object.entries(platformLinks)
+                  .filter(([_, url]) => url)
+                  .slice(0, 3)
+                  .map(([platformId, url]) => {
+                    const platformConfig = PLATFORM_CONFIG[platformId as keyof typeof PLATFORM_CONFIG]
+                    if (!platformConfig) return null
+                    
+                    return (
+                      <a
+                        key={platformId}
+                        href={url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className={`flex items-center justify-between p-3 rounded-lg ${platformConfig.color} ${platformConfig.textColor} hover:opacity-90 transition-opacity w-full`}
+                      >
+                        <div className="flex items-center gap-2">
+                          <img 
+                            src={platformConfig.icon} 
+                            alt={platformConfig.name}
+                            className="w-5 h-5 object-contain"
+                          />
+                          <span>{platformConfig.name}</span>
+                        </div>
+                        <ExternalLink className="w-4 h-4" />
+                      </a>
+                    )
+                  })
+                }
+                
+                {Object.values(platformLinks).filter(Boolean).length > 3 && (
+                  <button className="w-full p-3 bg-zinc-800 text-white rounded-lg flex items-center justify-center gap-1">
+                    <ChevronDown className="w-5 h-5" />
+                    Voir plus
+                  </button>
+                )}
+              </div>
+            </div>
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  </div>
+)
+}
