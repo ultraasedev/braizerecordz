@@ -1,0 +1,260 @@
+// app/models/social/index.ts
+import mongoose, { Schema, Document, Types } from 'mongoose';
+
+// Types d'identifiants communs
+export type ObjectIdType = Types.ObjectId | string;
+export type PlatformType = 'instagram' | 'facebook' | 'twitter' | 'youtube' | 'tiktok';
+
+// Interface de compte social
+export interface ISocialAccount extends Document {
+  userId: ObjectIdType;
+  platform: PlatformType;
+  username: string;
+  profileUrl: string;
+  accessToken: string;
+  refreshToken?: string;
+  tokenExpiry?: Date;
+  connected: boolean;
+  lastSynced?: Date;
+  metadata: {
+    [key: string]: any;
+  };
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+// Interface de post social
+export interface ISocialPost extends Document {
+  userId: ObjectIdType;
+  accountId: ObjectIdType;
+  platform: PlatformType;
+  content: {
+    text?: string;
+    media?: {
+      type: 'image' | 'video' | 'carousel';
+      urls: string[];
+      thumbnail?: string;
+    };
+  };
+  status: 'draft' | 'scheduled' | 'published' | 'failed';
+  scheduledFor?: Date;
+  publishedAt?: Date;
+  stats?: {
+    likes?: number;
+    comments?: number;
+    shares?: number;
+    views?: number;
+    engagement?: number;
+  };
+  platformPostId?: string;
+  metadata: {
+    [key: string]: any;
+  };
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+// Interface de post programmé
+export interface IScheduledPost extends Document {
+  userId: ObjectIdType;
+  accountId: ObjectIdType;
+  platform: PlatformType;
+  content: {
+    text?: string;
+    media?: {
+      type: 'image' | 'video' | 'carousel';
+      urls: string[];
+      thumbnail?: string;
+    };
+  };
+  status: 'scheduled' | 'published' | 'failed';
+  scheduledFor: Date;
+  publishedAt?: Date;
+  error?: string;
+  platformPostId?: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+// Interface d'élément de modération
+export interface IModerationItem extends Document {
+  userId: ObjectIdType;
+  accountId: ObjectIdType;
+  postId?: ObjectIdType;
+  platform: PlatformType;
+  type: 'comment' | 'message' | 'mention' | 'report';
+  content: string;
+  platformPostId?: string;
+  platformCommentId?: string;
+  author: {
+    id?: string;
+    name?: string;
+    profileUrl?: string;
+  };
+  sentiment?: number;
+  urgencyLevel?: 'high' | 'medium' | 'low';
+  status: 'pending' | 'approved' | 'rejected' | 'flagged' | 'auto_approved';
+  moderatorComment?: string;
+  moderatedAt?: Date;
+  moderatedBy?: ObjectIdType;
+  createdAt: Date;
+  discoveredAt: Date;
+  updatedAt: Date;
+}
+
+// Interface de campagne marketing
+export interface ISocialCampaign extends Document {
+  userId: ObjectIdType;
+  name: string;
+  description?: string;
+  platforms: PlatformType[];
+  status: 'draft' | 'active' | 'paused' | 'completed' | 'archived';
+  budget?: number;
+  spent?: number;
+  startDate: Date;
+  endDate: Date;
+  targeting?: {
+    ageRange?: [number, number];
+    gender?: string[];
+    locations?: string[];
+    interests?: string[];
+  };
+  posts: ObjectIdType[];
+  results?: {
+    impressions?: number;
+    reach?: number;
+    clicks?: number;
+    conversions?: number;
+    cpm?: number;
+    cpc?: number;
+    ctr?: number;
+  };
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+// Interface d'analytics social
+export interface ISocialAnalytics extends Document {
+  userId: ObjectIdType;
+  accountId: ObjectIdType;
+  platform: PlatformType;
+  date: Date;
+  period: 'day' | 'week' | 'month';
+  followers: {
+    count: number;
+    growth: number;
+    history: { date: string; value: number }[];
+  };
+  engagement: {
+    rate: number;
+    likes: number;
+    comments: number;
+    shares: number;
+    views?: number;
+  };
+  demographics?: {
+    ageRanges: { range: string; percentage: number }[];
+    genders: { gender: string; percentage: number }[];
+    locations: { country: string; percentage: number }[];
+    interests?: { interest: string; percentage: number }[];
+  };
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+// Schéma de compte social
+const SocialAccountSchema = new Schema<ISocialAccount>({
+  userId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+  platform: { type: String, required: true, enum: ['instagram', 'facebook', 'twitter', 'youtube', 'tiktok'] },
+  username: { type: String, required: true },
+  profileUrl: { type: String, required: true },
+  accessToken: { type: String, required: true },
+  refreshToken: { type: String },
+  tokenExpiry: { type: Date },
+  connected: { type: Boolean, default: true },
+  lastSynced: { type: Date },
+  metadata: { type: Schema.Types.Mixed, default: {} },
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now }
+}, { 
+  timestamps: true 
+});
+
+// Schéma de post social
+const SocialPostSchema = new Schema<ISocialPost>({
+  userId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+  accountId: { type: Schema.Types.ObjectId, ref: 'SocialAccount', required: true },
+  platform: { type: String, required: true, enum: ['instagram', 'facebook', 'twitter', 'youtube', 'tiktok'] },
+  content: {
+    text: { type: String },
+    media: {
+      type: { type: String, enum: ['image', 'video', 'carousel'] },
+      urls: [{ type: String }],
+      thumbnail: { type: String }
+    }
+  },
+  status: { type: String, required: true, enum: ['draft', 'scheduled', 'published', 'failed'], default: 'draft' },
+  scheduledFor: { type: Date },
+  publishedAt: { type: Date },
+  stats: {
+    likes: { type: Number },
+    comments: { type: Number },
+    shares: { type: Number },
+    views: { type: Number },
+    engagement: { type: Number }
+  },
+  platformPostId: { type: String },
+  metadata: { type: Schema.Types.Mixed, default: {} },
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now }
+}, { 
+  timestamps: true 
+});
+
+// Schéma de post programmé
+const ScheduledPostSchema = new Schema<IScheduledPost>({
+  userId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+  accountId: { type: Schema.Types.ObjectId, ref: 'SocialAccount', required: true },
+  platform: { type: String, required: true, enum: ['instagram', 'facebook', 'twitter', 'youtube', 'tiktok'] },
+  content: {
+    text: { type: String },
+    media: {
+      type: { type: String, enum: ['image', 'video', 'carousel'] },
+      urls: [{ type: String }],
+      thumbnail: { type: String }
+    }
+  },
+  status: { type: String, required: true, enum: ['scheduled', 'published', 'failed'], default: 'scheduled' },
+  scheduledFor: { type: Date, required: true },
+  publishedAt: { type: Date },
+  error: { type: String },
+  platformPostId: { type: String },
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now }
+}, { 
+  timestamps: true 
+});
+
+// Schéma d'élément de modération
+const ModerationItemSchema = new Schema<IModerationItem>({
+  userId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+  accountId: { type: Schema.Types.ObjectId, ref: 'SocialAccount', required: true },
+  postId: { type: Schema.Types.ObjectId, ref: 'SocialPost' },
+  platform: { type: String, required: true, enum: ['instagram', 'facebook', 'twitter', 'youtube', 'tiktok'] },
+  type: { type: String, required: true, enum: ['comment', 'message', 'mention', 'report'] },
+  content: { type: String, required: true },
+  platformPostId: { type: String },
+  platformCommentId: { type: String },
+  author: {
+    id: { type: String },
+    name: { type: String },
+    profileUrl: { type: String }
+  },
+  sentiment: { type: Number },
+  urgencyLevel: { type: String, enum: ['high', 'medium', 'low'], default: 'medium' },
+  status: { type: String, required: true, enum: ['pending', 'approved', 'rejected', 'flagged', 'auto_approved'], default: 'pending' },
+  moderatorComment: { type: String },
+  moderatedAt: { type: Date },
+  moderatedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+  createdAt: { type: Date, required: true },
+  discoveredAt: { type: Date, default: Date.now

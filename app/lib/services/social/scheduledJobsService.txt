@@ -1,0 +1,515 @@
+// app/lib/services/social/scheduledJobsService.ts
+
+import { ObjectId } from "mongodb";
+import connectDB from "@/app/lib/mongodb";
+import { PlatformServiceFactory } from "./platformService";
+import { SocialAccount, SocialPost } from "@/app/types";
+
+export class ScheduledJobsService {
+  static async initializeJobs() {
+    // Cette méthode serait appelée lors de l'initialisation de l'application
+    console.log('Tâches planifiées initialisées');
+    
+    // Pour le développement et les tests, on peut exécuter certaines tâches immédiatement
+    if (process.env.NODE_ENV !== "production") {
+      console.log('Exécution des tâches en mode développement...');
+      // await ScheduledJobsService.processScheduledPosts();
+    }
+  }
+  
+  static async processScheduledPosts() {
+    try {
+      console.log('Traitement des publications programmées...');
+      
+      // Connexion à la base de données
+      const db = await connectDB();
+      const scheduledPostsCollection = new db.Collection("scheduledPosts");
+      const socialAccountsCollection = new db.Collection("socialAccounts");
+      const postsCollection = new db.Collection("socialPosts");
+      
+      // Trouver les publications à publier (dont la date est passée)
+      const now = new Date();
+      const postsToPublish = await scheduledPostsCollection
+        .find({
+          status: "scheduled",
+          scheduledFor: { $lte: now }
+        })
+        .toArray();
+      
+      console.log(`${postsToPublish.length} publications à traiter`);
+      
+      for (const post of postsToPublish) {
+        try {
+          console.log(`Traitement de la publication ${post._id}...`);
+          
+          // Récupérer le compte associé
+          const account = await socialAccountsCollection.findOne({
+            _id: new ObjectId(post.accountId)
+          });
+          
+          if (!account || !account.connected) {
+            console.log(`Compte non disponible pour la publication ${post._id}`);
+            // Marquer comme erreur si le compte n'est pas disponible
+            await scheduledPostsCollection.updateOne(
+              { _id: post._id },
+              { $set: {
+                status: "failed",
+                error: "Compte non disponible",
+                updatedAt: new Date()
+              }}
+            );
+            continue;
+          }
+          
+          // Vérifier et rafraîchir le token si nécessaire
+          if (account.tokenExpiry && new Date(account.tokenExpiry) < now) {
+            console.log(`Rafraîchissement du token pour le compte ${account._id}...`);
+            
+            try {
+              const service = PlatformServiceFactory.getService(account.platform);
+              const refreshedAccount = await service.refreshToken(account);
+              
+              // Mettre à jour le compte dans la base de données
+              await socialAccountsCollection.updateOne(
+                { _id: account._id },
+                { $set: {
+                  accessToken: refreshedAccount.accessToken,
+                  refreshToken: refreshedAccount.refreshToken,
+                  tokenExpiry: refreshedAccount.tokenExpiry,
+                  updatedAt: new Date()
+                }}
+              );
+              
+              // Mettre à jour les infos locales
+              account.accessToken = refreshedAccount.accessToken;
+            } catch (error) {
+              console.error(`Erreur lors du rafraîchissement du token pour ${account._id}:`, error);
+              
+              // Marquer comme erreur
+              await scheduledPostsCollection.updateOne(
+                { _id: post._id },
+                { $set: {
+                  status: "failed",
+                  error: "Échec du rafraîchissement du token",
+                  updatedAt: new Date()
+                }}
+              );
+              continue;
+            }
+          }
+          
+          // Publier la publication
+          console.log(`Publication sur ${account.platform}...`);
+          
+          const service = PlatformServiceFactory.getService(account.platform);
+          
+          // Préparer les données de la publication
+          const postData: Partial<SocialPost> = {
+            content: post.content
+          };
+          
+          // Publier
+          const publishedPost = await service.createPost(account, postData);
+          
+          // Marquer comme publiée
+          await scheduledPostsCollection.updateOne(
+            { _id: post._id },
+            { $set: {
+              status: "published",
+              publishedAt: new Date(),
+              platformPostId: publishedPost.platformPostId,
+              updatedAt: new Date()
+            }}
+          );
+          
+          // Enregistrer dans la collection des publications
+          await postsCollection.insertOne({
+            ...publishedPost,
+            userId: post.userId,
+            scheduledPostId: post._id,
+            createdAt: new Date(),
+            updatedAt: new Date()
+          });
+          
+          console.log(`Publication ${post._id} publiée avec succès`);
+        } catch (error) {
+          console.error(`Erreur lors de la publication de ${post._id}:`, error);
+          
+          // Marquer comme erreur
+          await scheduledPostsCollection.updateOne(
+            { _id: post._id },
+            { $set: {
+              status: "failed",
+              error: error.message || "Erreur inconnue",
+              updatedAt: new Date()
+            }}
+          );
+        }
+      }
+      
+      console.log('Traitement des publications programmées terminé');
+    } catch (error) {
+      console.error("Erreur lors du traitement des publications programmées:", error);
+    }
+  }
+  
+  static async refreshExpiredTokens() {
+    try {
+      console.log('Rafraîchissement des tokens expirés...');
+      
+      // Connexion à la base de données
+      const db = await connectDB();
+      const socialAccountsCollection = db.collection("socialAccounts");
+      
+      // Trouver les comptes dont le token expire bientôt (dans les 24 heures)
+      const now = new Date();
+      const expiryThreshold = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+      
+      const accountsToRefresh = await socialAccountsCollection
+        .find({
+          connected: true,
+          tokenExpiry: { $lt: expiryThreshold, $gt: now }
+        })
+        .toArray();
+      
+      console.log(`${accountsToRefresh.length} comptes à rafraîchir`);
+      
+      for (const account of accountsToRefresh) {
+        try {
+          console.log(`Rafraîchissement du token pour le compte ${account._id} (${account.platform})...`);
+          
+          const service = PlatformServiceFactory.getService(account.platform);
+          const refreshedAccount = await service.refreshToken(account);
+          
+          // Mettre à jour le compte dans la base de données
+          await socialAccountsCollection.updateOne(
+            { _id: account._id },
+            { $set: {
+              accessToken: refreshedAccount.accessToken,
+              refreshToken: refreshedAccount.refreshToken,
+              tokenExpiry: refreshedAccount.tokenExpiry,
+              updatedAt: new Date()
+            }}
+          );
+          
+          console.log(`Token rafraîchi pour le compte ${account._id}`);
+        } catch (error) {
+          console.error(`Erreur lors du rafraîchissement du token pour ${account._id}:`, error);
+          
+          // Si l'erreur indique un token invalide, marquer le compte comme déconnecté
+          if (error.message.includes("invalid") || error.message.includes("expired")) {
+            await socialAccountsCollection.updateOne(
+              { _id: account._id },
+              { $set: {
+                connected: false,
+                connectionError: error.message,
+                updatedAt: new Date()
+              }}
+            );
+            
+            console.log(`Compte ${account._id} marqué comme déconnecté suite à une erreur de token`);
+          }
+        }
+      }
+      
+      console.log('Rafraîchissement des tokens terminé');
+    } catch (error) {
+      console.error("Erreur lors du rafraîchissement des tokens:", error);
+    }
+  }
+  
+  static async fetchCommentsForModeration() {
+    try {
+      console.log('Récupération des commentaires pour modération...');
+      
+      // Connexion à la base de données
+      const db = await connectDB();
+      const socialAccountsCollection = db.collection("socialAccounts");
+      const postsCollection = db.collection("socialPosts");
+      const moderationCollection = db.collection("socialModeration");
+      
+      // Récupérer les comptes connectés
+      const connectedAccounts = await socialAccountsCollection
+        .find({ connected: true })
+        .toArray();
+      
+      console.log(`${connectedAccounts.length} comptes connectés`);
+      
+      // Pour chaque compte, récupérer les publications récentes
+      for (const account of connectedAccounts) {
+        try {
+          console.log(`Traitement des commentaires pour le compte ${account._id} (${account.platform})...`);
+          
+          // Vérifier et rafraîchir le token si nécessaire
+          if (account.tokenExpiry && new Date(account.tokenExpiry) < new Date()) {
+            console.log(`Rafraîchissement du token pour le compte ${account._id}...`);
+            
+            try {
+              const service = PlatformServiceFactory.getService(account.platform);
+              const refreshedAccount = await service.refreshToken(account);
+              
+              // Mettre à jour le compte dans la base de données
+              await socialAccountsCollection.updateOne(
+                { _id: account._id },
+                { $set: {
+                  accessToken: refreshedAccount.accessToken,
+                  refreshToken: refreshedAccount.refreshToken,
+                  tokenExpiry: refreshedAccount.tokenExpiry,
+                  updatedAt: new Date()
+                }}
+              );
+              
+              // Mettre à jour les infos locales
+              account.accessToken = refreshedAccount.accessToken;
+            } catch (error) {
+              console.error(`Erreur lors du rafraîchissement du token pour ${account._id}:`, error);
+              continue;
+            }
+          }
+          
+          // Récupérer les publications récentes (dernière semaine)
+          const oneWeekAgo = new Date();
+          oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+          
+          const recentPosts = await postsCollection
+            .find({
+              accountId: account._id.toString(),
+              publishedAt: { $gte: oneWeekAgo }
+            })
+            .limit(10) // Limiter à 10 publications récentes
+            .toArray();
+          
+          console.log(`${recentPosts.length} publications récentes trouvées`);
+          
+          // Pour chaque publication, récupérer les commentaires
+          for (const post of recentPosts) {
+            try {
+              console.log(`Récupération des commentaires pour la publication ${post._id}...`);
+              
+              const service = PlatformServiceFactory.getService(account.platform);
+              const comments = await service.getComments(account, post.platformPostId);
+              
+              console.log(`${comments.length} commentaires trouvés`);
+              
+              // Pour chaque commentaire, vérifier s'il est déjà en modération
+              for (const comment of comments) {
+                // Vérifier si le commentaire existe déjà
+                const existingComment = await moderationCollection.findOne({
+                  platformCommentId: comment.id,
+                  postId: post._id.toString()
+                });
+                
+                if (!existingComment) {
+                  console.log(`Nouveau commentaire trouvé: ${comment.id}`);
+                  
+                  // Analyse de sentiment basique (à améliorer avec NLP)
+                  const sentiment = analyzeSentiment(comment.text);
+                  
+                  // Déterminer l'urgence basée sur le sentiment
+                  let urgencyLevel = "medium";
+                  if (sentiment < -0.5) {
+                    urgencyLevel = "high"; // Très négatif
+                  } else if (sentiment > 0.5) {
+                    urgencyLevel = "low"; // Très positif
+                  }
+                  
+                  // Si très négatif ou contient des mots sensibles, marquer pour modération
+                  const requiresModeration = sentiment < -0.2 || containsSensitiveWords(comment.text);
+                  
+                  // Insérer dans la collection de modération
+                  await moderationCollection.insertOne({
+                    type: "comment",
+                    platform: account.platform,
+                    accountId: account._id.toString(),
+                    userId: account.userId,
+                    postId: post._id.toString(),
+                    platformPostId: post.platformPostId,
+                    platformCommentId: comment.id,
+                    content: comment.text,
+                    author: comment.author,
+                    sentiment: sentiment,
+                    urgencyLevel: urgencyLevel,
+                    status: requiresModeration ? "pending" : "auto_approved",
+                    createdAt: new Date(comment.createdAt),
+                    discoveredAt: new Date(),
+                    updatedAt: new Date()
+                  });
+                }
+              }
+            } catch (error) {
+              console.error(`Erreur lors de la récupération des commentaires pour ${post._id}:`, error);
+              // Continuer avec les autres publications
+            }
+          }
+        } catch (error) {
+          console.error(`Erreur lors du traitement du compte ${account._id}:`, error);
+          // Continuer avec les autres comptes
+        }
+      }
+      
+      console.log('Récupération des commentaires terminée');
+    } catch (error) {
+      console.error("Erreur lors de la récupération des commentaires:", error);
+    }
+  }
+  
+  static async syncAccountData() {
+    try {
+      console.log('Synchronisation des données des comptes...');
+      
+      // Connexion à la base de données
+      const db = await connectDB();
+      const socialAccountsCollection = db.collection("socialAccounts");
+      
+      // Récupérer tous les comptes connectés
+      const connectedAccounts = await socialAccountsCollection
+        .find({ connected: true })
+        .toArray();
+      
+      console.log(`${connectedAccounts.length} comptes à synchroniser`);
+      
+      for (const account of connectedAccounts) {
+        try {
+          console.log(`Synchronisation du compte ${account._id} (${account.platform})...`);
+          
+          // Vérifier et rafraîchir le token si nécessaire
+          if (account.tokenExpiry && new Date(account.tokenExpiry) < new Date()) {
+            console.log(`Rafraîchissement du token pour le compte ${account._id}...`);
+            
+            try {
+              const service = PlatformServiceFactory.getService(account.platform);
+              const refreshedAccount = await service.refreshToken(account);
+              
+              // Mettre à jour le compte dans la base de données
+              await socialAccountsCollection.updateOne(
+                { _id: account._id },
+                { $set: {
+                  accessToken: refreshedAccount.accessToken,
+                  refreshToken: refreshedAccount.refreshToken,
+                  tokenExpiry: refreshedAccount.tokenExpiry,
+                  updatedAt: new Date()
+                }}
+              );
+              
+              // Mettre à jour les infos locales
+              account.accessToken = refreshedAccount.accessToken;
+            } catch (error) {
+              console.error(`Erreur lors du rafraîchissement du token pour ${account._id}:`, error);
+              continue;
+            }
+          }
+          
+          // Récupérer les informations actualisées du compte
+          const service = PlatformServiceFactory.getService(account.platform);
+          const updatedAccount = await service.getAccountInfo(account);
+          
+          // Mettre à jour le compte dans la base de données
+          await socialAccountsCollection.updateOne(
+            { _id: account._id },
+            { $set: {
+              username: updatedAccount.username,
+              profileUrl: updatedAccount.profileUrl,
+              metadata: updatedAccount.metadata,
+              lastSynced: new Date(),
+              updatedAt: new Date()
+            }}
+          );
+          
+          console.log(`Compte ${account._id} synchronisé avec succès`);
+        } catch (error) {
+          console.error(`Erreur lors de la synchronisation du compte ${account._id}:`, error);
+          
+          // Si l'erreur est grave, marquer le compte comme déconnecté
+          if (isAuthError(error)) {
+            await socialAccountsCollection.updateOne(
+              { _id: account._id },
+              { $set: {
+                connected: false,
+                connectionError: error.message,
+                updatedAt: new Date()
+              }}
+            );
+            
+            console.log(`Compte ${account._id} marqué comme déconnecté suite à une erreur d'authentification`);
+          }
+        }
+      }
+      
+      console.log('Synchronisation des comptes terminée');
+    } catch (error) {
+      console.error("Erreur lors de la synchronisation des comptes:", error);
+    }
+  }
+}
+
+// Utilitaires
+
+function isAuthError(error: any): boolean {
+  const errorMessage = error.message?.toLowerCase() || '';
+  return (
+    errorMessage.includes('auth') ||
+    errorMessage.includes('token') ||
+    errorMessage.includes('permission') ||
+    errorMessage.includes('expired') ||
+    errorMessage.includes('unauthorized') ||
+    errorMessage.includes('unauthenticated')
+  );
+}
+
+function analyzeSentiment(text: string): number {
+  // Ceci est une implémentation très basique d'analyse de sentiment
+  // Dans un système réel, on utiliserait une API NLP comme Google Cloud Natural Language
+  const positiveWords = [
+    'bon', 'super', 'excellent', 'génial', 'aime', 'love', 'great', 'cool', 'top',
+    'merci', 'thanks', 'bien', 'bravo', 'congratulations', 'félicitations', 'beau',
+    'like', 'j\'aime', 'awesome', 'amazing', 'incroyable', 'impressionnant'
+  ];
+  
+  const negativeWords = [
+    'mauvais', 'nul', 'terrible', 'horrible', 'déteste', 'hate', 'bad', 'pourri',
+    'merde', 'shit', 'fuck', 'pute', 'con', 'débile', 'idiot', 'stupide', 'stupid',
+    'crap', 'garbage', 'trash', 'bitch', 'connard', 'enculé', 'pétasse', 'salope'
+  ];
+  
+  const lowercaseText = text.toLowerCase();
+  
+  let score = 0;
+  let totalMatches = 0;
+  
+  for (const word of positiveWords) {
+    if (lowercaseText.includes(word)) {
+      score += 1;
+      totalMatches += 1;
+    }
+  }
+  
+  for (const word of negativeWords) {
+    if (lowercaseText.includes(word)) {
+      score -= 1.5; // Pondération plus forte pour les mots négatifs
+      totalMatches += 1;
+    }
+  }
+  
+  // Normaliser entre -1 et 1
+  return totalMatches > 0 ? score / totalMatches : 0;
+}
+
+function containsSensitiveWords(text: string): boolean {
+  const sensitiveWords = [
+    // Mots offensants
+    'connard', 'enculé', 'pute', 'salope', 'bitch', 'fuck', 'merde', 'shit',
+    'nazi', 'hitler', 'suicide', 'terroriste', 'bombe', 'tuer', 'mort', 'mourir',
+    'violence', 'drogue', 'cocaïne', 'héroine', 'raciste', 'racisme', 'antisémite',
+    'homophobe', 'sexiste', 'pédophile', 'viol', 'death', 'kill', 'drugs'
+  ];
+  
+  const lowercaseText = text.toLowerCase();
+  
+  for (const word of sensitiveWords) {
+    if (lowercaseText.includes(word)) {
+      return true;
+    }
+  }
+  
+  return false;
+}

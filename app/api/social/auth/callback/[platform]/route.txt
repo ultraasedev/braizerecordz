@@ -1,0 +1,77 @@
+// app/api/social/auth/callback/[platform]/route.ts
+import { verifyAuth } from "@/app/lib/auth";
+import connectDB from "@/app/lib/mongodb";
+import { ObjectId } from "mongodb";
+import { NextRequest, NextResponse } from "next/server";
+
+export async function GET(req: NextRequest, { params }: { params: { platform: string } }) {
+  try {
+    // Vérifier l'authentification
+    const authResult = await verifyAuth(req);
+    if (!authResult) {
+      return NextResponse.redirect(new URL("/login", req.url));
+    }
+
+    const platform = params.platform;
+    const searchParams = req.nextUrl.searchParams;
+    const code = searchParams.get("code");
+
+    if (!code) {
+      return NextResponse.redirect(new URL(`/dashboard/social/accounts?error=no_code`, req.url));
+    }
+
+    try {
+      // Connexion à la base de données
+      const db = await connectDB();
+      
+      // Obtenir le service correspondant à la plateforme
+      const service = PlatformServiceFactory.getService(platform);
+      
+      // Échanger le code contre un token d'accès
+      const account = await service.handleCallback(code);
+      
+      // Ajouter l'ID utilisateur à l'objet compte
+      account.userId = new ObjectId(authResult.userId);
+      
+      // Enregistrer le compte dans la base de données
+      const socialAccountsCollection = new db.Collection("socialAccounts");
+      
+      // Vérifier si le compte existe déjà
+      const existingAccount = await socialAccountsCollection.findOne({
+        platform: account.platform,
+        "metadata.userId": account.metadata.userId,
+        userId: account.userId
+      });
+      
+      if (existingAccount) {
+        // Mettre à jour le compte existant
+        await socialAccountsCollection.updateOne(
+          { _id: existingAccount._id },
+          { $set: {
+            accessToken: account.accessToken,
+            refreshToken: account.refreshToken,
+            tokenExpiry: account.tokenExpiry,
+            connected: true,
+            updatedAt: new Date()
+          }}
+        );
+      } else {
+        // Insérer un nouveau compte
+        await socialAccountsCollection.insertOne({
+          ...account,
+          createdAt: new Date(),
+          updatedAt: new Date()
+        });
+      }
+      
+      // Rediriger vers la page des comptes
+      return NextResponse.redirect(new URL("/dashboard/social/accounts?success=connected", req.url));
+    } catch (error: any) {
+      console.error(`Erreur lors du callback ${platform}:`, error);
+      return NextResponse.redirect(new URL(`/dashboard/social/accounts?error=${encodeURIComponent(error.message)}`, req.url));
+    }
+  } catch (error: any) {
+    console.error("Erreur serveur lors du callback:", error);
+    return NextResponse.redirect(new URL("/dashboard/social/accounts?error=server_error", req.url));
+  }
+}

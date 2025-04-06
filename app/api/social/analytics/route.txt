@@ -1,0 +1,82 @@
+import { verifyAuth } from "@/app/lib/auth";
+import connectDB from "@/app/lib/mongodb";
+import { ObjectId } from "mongodb";
+import { NextRequest, NextResponse } from "next/server";
+
+// app/api/social/analytics/route.ts
+export async function GET(req: NextRequest) {
+    try {
+      // Vérifier l'authentification
+      const authResult = await verifyAuth(req);
+      if (!authResult) {
+        return NextResponse.json({ error: "Non autorisé" }, { status: 401 });
+      }
+  
+      // Récupérer les paramètres de la requête
+      const searchParams = req.nextUrl.searchParams;
+      const platform = searchParams.get("platform");
+      const period = (searchParams.get("period") || "month") as "day" | "week" | "month";
+      
+      // Connexion à la base de données
+      const db = await connectDB();
+      const socialAccountsCollection = new db.Collection("socialAccounts");
+      
+      // Récupérer les comptes de l'utilisateur
+      let accountsQuery: any = { userId: new ObjectId(authResult.userId), connected: true };
+      
+      if (platform) {
+        accountsQuery.platform = platform;
+      }
+      
+      const accounts = await socialAccountsCollection
+        .find(accountsQuery)
+        .toArray();
+      
+      if (accounts.length === 0) {
+        return NextResponse.json([]);
+      }
+      
+      // Récupérer les analytics pour chaque compte
+      const allAnalytics = [];
+      
+      for (const account of accounts) {
+        try {
+          // Vérifier et rafraîchir le token si nécessaire
+          if (account.tokenExpiry && new Date(account.tokenExpiry) < new Date()) {
+            const service = PlatformServiceFactory.getService(account.platform);
+            const refreshedAccount = await service.refreshToken(account);
+            
+            // Mettre à jour le compte dans la base de données
+            await socialAccountsCollection.updateOne(
+              { _id: account._id },
+              { $set: {
+                accessToken: refreshedAccount.accessToken,
+                refreshToken: refreshedAccount.refreshToken,
+                tokenExpiry: refreshedAccount.tokenExpiry
+              }}
+            );
+            
+            account.accessToken = refreshedAccount.accessToken;
+          }
+          
+          // Récupérer les analytics
+          const service = PlatformServiceFactory.getService(account.platform);
+          const analytics = await service.getAnalytics(account, period);
+          
+          allAnalytics.push({
+            accountId: account._id,
+            ...analytics
+          });
+        } catch (error) {
+          console.error(`Erreur lors de la récupération des analytics ${account.platform}:`, error);
+          // Continuer avec les autres comptes
+        }
+      }
+      
+      return NextResponse.json(allAnalytics);
+    } catch (error: any) {
+      console.error("Erreur lors de la récupération des analytics:", error);
+      return NextResponse.json({ error: "Erreur serveur" }, { status: 500 });
+    }
+  }
+  

@@ -12,7 +12,9 @@ import {
   X, Settings, BarChart2, Link, Edit, Eye, ArrowLeft,
   MessageSquare, Palette, Sliders, RefreshCw, Calendar,
   Repeat, Volume, Volume2, VolumeX, Lock, Unlock, Save,
-  Info
+  Info,
+  CheckCircle2,
+  Clock
 } from "lucide-react"
 import { toast } from "sonner"
 import { Release, ReleaseStatus, DistributionPlatform } from "@/app/types/distribution"

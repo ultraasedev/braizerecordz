@@ -1,0 +1,36 @@
+// app/api/social/auth/connect/route.ts
+import { NextRequest, NextResponse } from "next/server";
+import { PlatformServiceFactory } from "@/app/lib/services/social/platformService";
+import connectDB from "@/app/lib/mongodb";
+import { verifyAuth } from "@/app/lib/auth";
+
+export async function GET(req: NextRequest) {
+  try {
+    // Vérifier l'authentification
+    const authResult = await verifyAuth(req);
+    if (!authResult) {
+      return NextResponse.json({ error: "Non autorisé" }, { status: 401 });
+    }
+
+    // Récupérer la plateforme depuis la requête
+    const searchParams = req.nextUrl.searchParams;
+    const platform = searchParams.get("platform");
+
+    if (!platform) {
+      return NextResponse.json({ error: "Plateforme non spécifiée" }, { status: 400 });
+    }
+
+    // Obtenir l'URL d'authentification pour la plateforme
+    try {
+      const service = PlatformServiceFactory.getService(platform);
+      const authUrl = service.getAuthUrl();
+
+      return NextResponse.json({ url: authUrl });
+    } catch (error: any) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
+  } catch (error: any) {
+    console.error("Erreur lors de la génération de l'URL d'authentification:", error);
+    return NextResponse.json({ error: "Erreur serveur" }, { status: 500 });
+  }
+}

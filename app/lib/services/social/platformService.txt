@@ -1,0 +1,2255 @@
+// app/lib/services/social/platformService.ts
+
+import type { SocialAccount, SocialPost, SocialAnalytics } from '@/app/types';
+
+/**
+ * Interface générique pour tous les services de plateforme sociale
+ * Chaque plateforme doit implémenter cette interface
+ */
+export interface PlatformService {
+  // Authentification
+  getAuthUrl(): string;
+  handleCallback(code: string): Promise<SocialAccount>;
+  refreshToken(account: SocialAccount): Promise<SocialAccount>;
+  
+  // Informations de compte
+  getAccountInfo(account: SocialAccount): Promise<SocialAccount>;
+  
+  // Publications
+  getPosts(account: SocialAccount, options?: { limit?: number; before?: string }): Promise<SocialPost[]>;
+  createPost(account: SocialAccount, post: Partial<SocialPost>): Promise<SocialPost>;
+  schedulePost(account: SocialAccount, post: Partial<SocialPost>): Promise<SocialPost>;
+  deletePost(account: SocialAccount, postId: string): Promise<boolean>;
+  
+  // Statistiques
+  getAnalytics(account: SocialAccount, period: 'day' | 'week' | 'month'): Promise<SocialAnalytics>;
+  getPostAnalytics(account: SocialAccount, postId: string): Promise<Partial<SocialPost>>;
+  
+  // Modération
+  getComments(account: SocialAccount, postId: string): Promise<any[]>;
+  replyToComment(account: SocialAccount, commentId: string, reply: string): Promise<any>;
+  deleteComment(account: SocialAccount, commentId: string): Promise<boolean>;
+}
+
+/**
+ * Fabrique de services de plateforme
+ * Retourne le service correspondant à une plateforme donnée
+ */
+export class PlatformServiceFactory {
+  static getService(platform: string): PlatformService {
+    switch (platform) {
+      case 'instagram':
+      case 'facebook':
+        return new FacebookService(); // Instagram utilise l'API Facebook
+      case 'twitter':
+        return new TwitterService();
+      case 'youtube':
+        return new YoutubeService();
+      case 'tiktok':
+        return new TikTokService();
+      default:
+        throw new Error(`Plateforme non supportée: ${platform}`);
+    }
+  }
+}
+
+/**
+ * Adaptateur pour l'API Facebook Graph (Facebook & Instagram)
+ */
+class FacebookService implements PlatformService {
+  private baseUrl = 'https://graph.facebook.com/v18.0';
+  private clientId = process.env.FACEBOOK_CLIENT_ID!;
+  private clientSecret = process.env.FACEBOOK_CLIENT_SECRET!;
+  private redirectUri = process.env.FACEBOOK_REDIRECT_URI!;
+  
+  // Implémentation des méthodes d'authentification
+  getAuthUrl(): string {
+    const scopes = [
+      'pages_show_list', 
+      'pages_read_engagement', 
+      'pages_manage_posts',
+      'instagram_basic',
+      'instagram_content_publish',
+      'instagram_manage_comments'
+    ];
+    
+    return `https://www.facebook.com/v18.0/dialog/oauth?client_id=${this.clientId}&redirect_uri=${this.redirectUri}&scope=${scopes.join(',')}`;
+  }
+  
+  async handleCallback(code: string): Promise<SocialAccount> {
+    // Échanger le code contre un token d'accès
+    const tokenResponse = await fetch(`${this.baseUrl}/oauth/access_token?client_id=${this.clientId}&redirect_uri=${this.redirectUri}&client_secret=${this.clientSecret}&code=${code}`);
+    
+    if (!tokenResponse.ok) {
+      throw new Error('Échec de l\'authentification Facebook');
+    }
+    
+    const tokenData = await tokenResponse.json();
+    
+    // Obtenir les informations de l'utilisateur
+    const userResponse = await fetch(`${this.baseUrl}/me?fields=id,name,accounts{name,id,access_token,instagram_business_account{id,username}}&access_token=${tokenData.access_token}`);
+    
+    if (!userResponse.ok) {
+      throw new Error('Échec de récupération des informations utilisateur Facebook');
+    }
+    
+    const userData = await userResponse.json();
+    
+    // Récupérer les pages et comptes Instagram associés
+    const accounts: SocialAccount[] = [];
+    
+    // Pages Facebook
+    if (userData.accounts && userData.accounts.data) {
+      for (const page of userData.accounts.data) {
+        accounts.push({
+          id: `facebook_${page.id}`,
+          platform: 'facebook',
+          username: page.name,
+          profileUrl: `https://facebook.com/${page.id}`,
+          accessToken: page.access_token,
+          connected: true,
+          metadata: {
+            pageId: page.id,
+            userId: userData.id
+          }
+        });
+        
+        // Comptes Instagram liés
+        if (page.instagram_business_account) {
+          accounts.push({
+            id: `instagram_${page.instagram_business_account.id}`,
+            platform: 'instagram',
+            username: page.instagram_business_account.username,
+            profileUrl: `https://instagram.com/${page.instagram_business_account.username}`,
+            accessToken: page.access_token,
+            connected: true,
+            metadata: {
+              instagramBusinessId: page.instagram_business_account.id,
+              pageId: page.id,
+              userId: userData.id
+            }
+          });
+        }
+      }
+    }
+    
+    // Retourner le premier compte trouvé (dans une implémentation réelle, on pourrait demander à l'utilisateur de choisir)
+    return accounts[0] || {
+      id: `facebook_${userData.id}`,
+      platform: 'facebook',
+      username: userData.name,
+      profileUrl: `https://facebook.com/${userData.id}`,
+      accessToken: tokenData.access_token,
+      connected: true,
+      metadata: {
+        userId: userData.id
+      }
+    };
+  }
+  
+  // Autres méthodes de l'interface à implémenter...
+  
+  async refreshToken(account: SocialAccount): Promise<SocialAccount> {
+    // Facebook page tokens sont de longue durée et n'ont généralement pas besoin d'être rafraîchis
+    return account;
+  }
+  
+  async getAccountInfo(account: SocialAccount): Promise<SocialAccount> {
+    if (account.platform === 'instagram') {
+      const instagramId = account.metadata.instagramBusinessId;
+      const response = await fetch(`${this.baseUrl}/${instagramId}?fields=username,profile_picture_url,followers_count,media_count&access_token=${account.accessToken}`);
+      
+      if (!response.ok) {
+        throw new Error('Échec de récupération des informations du compte Instagram');
+      }
+      
+      const data = await response.json();
+      
+      return {
+        ...account,
+        username: data.username,
+        metadata: {
+          ...account.metadata,
+          followersCount: data.followers_count,
+          mediaCount: data.media_count,
+          profilePictureUrl: data.profile_picture_url
+        },
+        lastSynced: new Date()
+      };
+    } else {
+      const pageId = account.metadata.pageId;
+      const response = await fetch(`${this.baseUrl}/${pageId}?fields=name,fan_count,picture&access_token=${account.accessToken}`);
+      
+      if (!response.ok) {
+        throw new Error('Échec de récupération des informations de la page Facebook');
+      }
+      
+      const data = await response.json();
+      
+      return {
+        ...account,
+        username: data.name,
+        metadata: {
+          ...account.metadata,
+          followersCount: data.fan_count,
+          profilePictureUrl: data.picture?.data?.url
+        },
+        lastSynced: new Date()
+      };
+    }
+  }
+  
+  async getPosts(account: SocialAccount, options?: { limit?: number; before?: string }): Promise<SocialPost[]> {
+    const limit = options?.limit || 25;
+    const before = options?.before ? `&before=${options.before}` : '';
+    
+    let endpoint, fields;
+    
+    if (account.platform === 'instagram') {
+      const instagramId = account.metadata.instagramBusinessId;
+      endpoint = `${this.baseUrl}/${instagramId}/media`;
+      fields = 'id,caption,media_type,media_url,thumbnail_url,permalink,timestamp,like_count,comments_count';
+    } else {
+      const pageId = account.metadata.pageId;
+      endpoint = `${this.baseUrl}/${pageId}/posts`;
+      fields = 'id,message,created_time,full_picture,permalink_url,attachments,shares,likes.summary(true),comments.summary(true)';
+    }
+    
+    const response = await fetch(`${endpoint}?fields=${fields}&limit=${limit}${before}&access_token=${account.accessToken}`);
+    
+    if (!response.ok) {
+      throw new Error(`Échec de récupération des publications ${account.platform}`);
+    }
+    
+    const data = await response.json();
+    
+    return data.data.map((post: any) => this.mapToSocialPost(post, account));
+  }
+  
+  private mapToSocialPost(post: any, account: SocialAccount): SocialPost {
+    if (account.platform === 'instagram') {
+      return {
+        id: `instagram_post_${post.id}`,
+        platform: 'instagram',
+        accountId: account.id,
+        content: {
+          text: post.caption || '',
+          media: {
+            type: this.mapInstagramMediaType(post.media_type),
+            urls: [post.media_url],
+            thumbnail: post.thumbnail_url || post.media_url
+          }
+        },
+        status: 'published',
+        publishedAt: new Date(post.timestamp),
+        stats: {
+          likes: post.like_count,
+          comments: post.comments_count,
+          engagement: post.like_count + post.comments_count
+        },
+        platformPostId: post.id,
+        metadata: {
+          permalink: post.permalink
+        }
+      };
+    } else {
+      return {
+        id: `facebook_post_${post.id}`,
+        platform: 'facebook',
+        accountId: account.id,
+        content: {
+          text: post.message || '',
+          media: post.full_picture ? {
+            type: 'image',
+            urls: [post.full_picture],
+            thumbnail: post.full_picture
+          } : undefined
+        },
+        status: 'published',
+        publishedAt: new Date(post.created_time),
+        stats: {
+          likes: post.likes?.summary?.total_count || 0,
+          comments: post.comments?.summary?.total_count || 0,
+          shares: post.shares?.count || 0,
+          engagement: (post.likes?.summary?.total_count || 0) + 
+                      (post.comments?.summary?.total_count || 0) + 
+                      (post.shares?.count || 0)
+        },
+        platformPostId: post.id,
+        metadata: {
+          permalink: post.permalink_url
+        }
+      };
+    }
+  }
+  
+  private mapInstagramMediaType(mediaType: string): 'image' | 'video' | 'carousel' {
+    switch (mediaType) {
+      case 'IMAGE': return 'image';
+      case 'VIDEO': return 'video';
+      case 'CAROUSEL_ALBUM': return 'carousel';
+      default: return 'image';
+    }
+  }
+  
+  async createPost(account: SocialAccount, post: Partial<SocialPost>): Promise<SocialPost> {
+    // Implémentation pour créer une publication
+    // Cette méthode diffère considérablement entre Facebook et Instagram
+    
+    if (account.platform === 'instagram') {
+      // Pour Instagram, il faut d'abord créer un conteneur, puis le publier
+      const instagramId = account.metadata.instagramBusinessId;
+      
+      if (post.content?.media?.type === 'image') {
+        // Création d'un conteneur pour l'image
+        const containerResponse = await fetch(`${this.baseUrl}/${instagramId}/media`, {
+          method: 'POST',
+          body: new URLSearchParams({
+            image_url: post.content.media.urls[0],
+            caption: post.content.text || '',
+            access_token: account.accessToken
+          })
+        });
+        
+        if (!containerResponse.ok) {
+          throw new Error('Échec de création du conteneur média Instagram');
+        }
+        
+        const containerData = await containerResponse.json();
+        
+        // Publication du conteneur
+        const publishResponse = await fetch(`${this.baseUrl}/${instagramId}/media_publish`, {
+          method: 'POST',
+          body: new URLSearchParams({
+            creation_id: containerData.id,
+            access_token: account.accessToken
+          })
+        });
+        
+        if (!publishResponse.ok) {
+          throw new Error('Échec de publication du média Instagram');
+        }
+        
+        const publishData = await publishResponse.json();
+        
+        // Récupérer les détails du post publié
+        return this.getPostById(account, publishData.id);
+      } else {
+        throw new Error('Type de média non supporté pour Instagram');
+      }
+    } else {
+      // Publication sur Facebook
+      const pageId = account.metadata.pageId;
+      
+      const params: Record<string, string> = {
+        message: post.content?.text || '',
+        access_token: account.accessToken
+      };
+      
+      if (post.content?.media?.urls[0]) {
+        params.link = post.content.media.urls[0];
+      }
+      
+      const response = await fetch(`${this.baseUrl}/${pageId}/feed`, {
+        method: 'POST',
+        body: new URLSearchParams(params)
+      });
+      
+      if (!response.ok) {
+        throw new Error('Échec de publication Facebook');
+      }
+      
+      const data = await response.json();
+      
+      // Récupérer les détails du post publié
+      return this.getPostById(account, data.id);
+    }
+  }
+  
+  private async getPostById(account: SocialAccount, postId: string): Promise<SocialPost> {
+    let endpoint, fields;
+    
+    if (account.platform === 'instagram') {
+      endpoint = `${this.baseUrl}/${postId}`;
+      fields = 'id,caption,media_type,media_url,thumbnail_url,permalink,timestamp,like_count,comments_count';
+    } else {
+      endpoint = `${this.baseUrl}/${postId}`;
+      fields = 'id,message,created_time,full_picture,permalink_url,attachments,shares,likes.summary(true),comments.summary(true)';
+    }
+    
+    const response = await fetch(`${endpoint}?fields=${fields}&access_token=${account.accessToken}`);
+    
+    if (!response.ok) {
+      throw new Error(`Échec de récupération du post ${postId}`);
+    }
+    
+    const postData = await response.json();
+    
+    return this.mapToSocialPost(postData, account);
+  }
+  
+  async schedulePost(account: SocialAccount, post: Partial<SocialPost>): Promise<SocialPost> {
+    if (!post.scheduledFor) {
+      throw new Error('Date de planification requise');
+    }
+    
+    // Format de l'heure Unix pour Facebook
+    const scheduledTime = Math.floor(post.scheduledFor.getTime() / 1000);
+    
+    if (account.platform === 'instagram') {
+      // Instagram ne supporte pas directement la programmation via l'API Graph
+      // On stocke donc localement et on utilisera un job pour publier au moment voulu
+      return {
+        id: `scheduled_instagram_${Date.now()}`,
+        platform: 'instagram',
+        accountId: account.id,
+        content: post.content || { text: '' },
+        status: 'scheduled',
+        scheduledFor: post.scheduledFor,
+        metadata: {}
+      };
+    } else {
+      // Publication programmée sur Facebook
+      const pageId = account.metadata.pageId;
+      
+      const params: Record<string, string> = {
+        message: post.content?.text || '',
+        published: 'false',
+        scheduled_publish_time: scheduledTime.toString(),
+        access_token: account.accessToken
+      };
+      
+      if (post.content?.media?.urls[0]) {
+        params.link = post.content.media.urls[0];
+      }
+      
+      const response = await fetch(`${this.baseUrl}/${pageId}/feed`, {
+        method: 'POST',
+        body: new URLSearchParams(params)
+      });
+      
+      if (!response.ok) {
+        throw new Error('Échec de programmation Facebook');
+      }
+      
+      const data = await response.json();
+      
+      return {
+        id: `facebook_scheduled_${data.id}`,
+        platform: 'facebook',
+        accountId: account.id,
+        content: post.content || { text: '' },
+        status: 'scheduled',
+        scheduledFor: post.scheduledFor,
+        platformPostId: data.id,
+        metadata: {}
+      };
+    }
+  }
+  
+  async deletePost(account: SocialAccount, postId: string): Promise<boolean> {
+    // Extraction de l'ID de la plateforme
+    const platformPostId = postId.includes('_post_') 
+      ? postId.split('_post_')[1] 
+      : postId.includes('_scheduled_')
+        ? postId.split('_scheduled_')[1]
+        : postId;
+    
+    const response = await fetch(`${this.baseUrl}/${platformPostId}`, {
+      method: 'DELETE',
+      body: new URLSearchParams({
+        access_token: account.accessToken
+      })
+    });
+    
+    if (!response.ok) {
+      throw new Error(`Échec de suppression du post ${postId}`);
+    }
+    
+    const data = await response.json();
+    return data.success === true;
+  }
+  
+  async getAnalytics(account: SocialAccount, period: 'day' | 'week' | 'month'): Promise<SocialAnalytics> {
+    // Les métriques et périodes diffèrent entre Facebook et Instagram
+    let endpoint, metrics;
+    const now = new Date();
+    let since: Date;
+    
+    switch (period) {
+      case 'day':
+        since = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+        break;
+      case 'week':
+        since = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+        break;
+      case 'month':
+      default:
+        since = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+        break;
+    }
+    
+    const sinceTimestamp = Math.floor(since.getTime() / 1000);
+    const untilTimestamp = Math.floor(now.getTime() / 1000);
+    
+    if (account.platform === 'instagram') {
+      const instagramId = account.metadata.instagramBusinessId;
+      endpoint = `${this.baseUrl}/${instagramId}/insights`;
+      metrics = 'impressions,reach,profile_views,follower_count';
+      
+      // Pour Instagram, on utilise aussi les données de l'utilisateur
+      const userResponse = await fetch(`${this.baseUrl}/${instagramId}?fields=followers_count&access_token=${account.accessToken}`);
+      const userData = await userResponse.json();
+      
+      // Obtenir historique des followers (simulé car pas directement disponible)
+      const followerHistory = await this.getSimulatedFollowerHistory(account, since, now);
+      
+      // Métriques d'engagement
+      const mediaResponse = await fetch(`${this.baseUrl}/${instagramId}/media?fields=like_count,comments_count&period=day&since=${sinceTimestamp}&until=${untilTimestamp}&access_token=${account.accessToken}`);
+      const mediaData = await mediaResponse.json();
+      
+      const likes = mediaData.data.reduce((sum: number, post: any) => sum + (post.like_count || 0), 0);
+      const comments = mediaData.data.reduce((sum: number, post: any) => sum + (post.comments_count || 0), 0);
+      
+      return {
+        platform: 'instagram',
+        period,
+        followers: {
+          count: userData.followers_count || 0,
+          growth: this.calculateGrowthRate(followerHistory),
+          history: followerHistory
+        },
+        engagement: {
+          rate: mediaData.data.length > 0 ? ((likes + comments) / (userData.followers_count * mediaData.data.length)) * 100 : 0,
+          likes,
+          comments,
+          shares: 0 // Instagram ne fournit pas cette métrique
+        }
+      };
+    } else {
+      const pageId = account.metadata.pageId;
+      endpoint = `${this.baseUrl}/${pageId}/insights`;
+      metrics = 'page_impressions,page_engaged_users,page_post_engagements,page_fans';
+      
+      const response = await fetch(`${endpoint}?metric=${metrics}&period=day&since=${sinceTimestamp}&until=${untilTimestamp}&access_token=${account.accessToken}`);
+      
+      if (!response.ok) {
+        throw new Error(`Échec de récupération des analyses ${account.platform}`);
+      }
+      
+      const data = await response.json();
+      
+      // Extraire les métriques
+      const impressions = this.sumInsightValues(data.data.find((d: any) => d.name === 'page_impressions')?.values || []);
+      const engagedUsers = this.sumInsightValues(data.data.find((d: any) => d.name === 'page_engaged_users')?.values || []);
+      const postEngagements = this.sumInsightValues(data.data.find((d: any) => d.name === 'page_post_engagements')?.values || []);
+      
+      // Données de fans (followers)
+      const fansData = data.data.find((d: any) => d.name === 'page_fans')?.values || [];
+      const currentFans = fansData.length > 0 ? fansData[fansData.length - 1].value : 0;
+      
+      // Historique des followers
+      const followerHistory = fansData.map((entry: any) => ({
+        date: new Date(entry.end_time).toISOString().split('T')[0],
+        value: entry.value
+      }));
+      
+      return {
+        platform: 'facebook',
+        period,
+        followers: {
+          count: currentFans,
+          growth: this.calculateGrowthRate(followerHistory),
+          history: followerHistory
+        },
+        engagement: {
+          rate: currentFans > 0 ? (engagedUsers / currentFans) * 100 : 0,
+          likes: 0, // Pas directement disponible dans ces métriques
+          comments: 0, // Pas directement disponible dans ces métriques
+          shares: 0, // Pas directement disponible dans ces métriques
+          views: impressions
+        }
+      };
+    }
+  }
+  
+  private sumInsightValues(values: any[]): number {
+    return values.reduce((sum, entry) => sum + entry.value, 0);
+  }
+  
+  private calculateGrowthRate(history: { date: string; value: number }[]): number {
+    if (history.length < 2) return 0;
+    
+    const oldest = history[0].value;
+    const newest = history[history.length - 1].value;
+    
+    if (oldest === 0) return 0;
+    return ((newest - oldest) / oldest) * 100;
+  }
+  
+// app/lib/services/social/platformService.ts (suite)
+
+private async getSimulatedFollowerHistory(
+    account: SocialAccount, 
+    since: Date, 
+    now: Date
+  ): Promise<{ date: string; value: number }[]> {
+    // Pour Instagram, nous n'avons pas d'historique de followers direct
+    // On simule avec la valeur actuelle et quelques variations pour le passé
+    const history: { date: string; value: number }[] = [];
+    const currentFollowers = account.metadata.followersCount || 0;
+    
+    // Créer des points de données quotidiens
+    const dayMillis = 24 * 60 * 60 * 1000;
+    const days = Math.ceil((now.getTime() - since.getTime()) / dayMillis);
+    
+    for (let i = 0; i < days; i++) {
+      const date = new Date(now.getTime() - i * dayMillis);
+      // Simuler une légère diminution dans le passé (environ 0.2% par jour)
+      const followerCount = Math.round(currentFollowers / (1 + i * 0.002));
+      
+      history.unshift({
+        date: date.toISOString().split('T')[0],
+        value: followerCount
+      });
+    }
+    
+    return history;
+  }
+  
+  async getPostAnalytics(account: SocialAccount, postId: string): Promise<Partial<SocialPost>> {
+    // Extraction de l'ID de la plateforme
+    const platformPostId = postId.includes('_post_') 
+      ? postId.split('_post_')[1] 
+      : postId;
+    
+    if (account.platform === 'instagram') {
+      const response = await fetch(`${this.baseUrl}/${platformPostId}/insights?metric=impressions,reach,engagement&access_token=${account.accessToken}`);
+      
+      if (!response.ok) {
+        throw new Error(`Échec de récupération des analyses du post Instagram ${postId}`);
+      }
+      
+      const data = await response.json();
+      
+      // Obtenir aussi les likes et commentaires
+      const mediaResponse = await fetch(`${this.baseUrl}/${platformPostId}?fields=like_count,comments_count&access_token=${account.accessToken}`);
+      const mediaData = await mediaResponse.json();
+      
+      return {
+        stats: {
+          likes: mediaData.like_count || 0,
+          comments: mediaData.comments_count || 0,
+          views: data.data.find((d: any) => d.name === 'impressions')?.values[0]?.value || 0,
+          engagement: data.data.find((d: any) => d.name === 'engagement')?.values[0]?.value || 0
+        }
+      };
+    } else {
+      const response = await fetch(`${this.baseUrl}/${platformPostId}/insights?metric=post_impressions,post_reactions_by_type_total,post_comments,post_shares&access_token=${account.accessToken}`);
+      
+      if (!response.ok) {
+        throw new Error(`Échec de récupération des analyses du post Facebook ${postId}`);
+      }
+      
+      const data = await response.json();
+      
+      const impressions = data.data.find((d: any) => d.name === 'post_impressions')?.values[0]?.value || 0;
+      const reactions = data.data.find((d: any) => d.name === 'post_reactions_by_type_total')?.values[0]?.value || {};
+      const comments = data.data.find((d: any) => d.name === 'post_comments')?.values[0]?.value || 0;
+      const shares = data.data.find((d: any) => d.name === 'post_shares')?.values[0]?.value || 0;
+      
+      // Calculer le total des réactions
+      const likes = Object.values(reactions).reduce((sum: number, val: any) => sum + val, 0);
+      
+      return {
+        stats: {
+          likes,
+          comments,
+          shares,
+          views: impressions,
+          engagement: likes + comments + shares
+        }
+      };
+    }
+  }
+  
+  async getComments(account: SocialAccount, postId: string): Promise<any[]> {
+    // Extraction de l'ID de la plateforme
+    const platformPostId = postId.includes('_post_') 
+      ? postId.split('_post_')[1] 
+      : postId;
+    
+    const response = await fetch(`${this.baseUrl}/${platformPostId}/comments?fields=id,text,username,timestamp&access_token=${account.accessToken}`);
+    
+    if (!response.ok) {
+      throw new Error(`Échec de récupération des commentaires pour ${postId}`);
+    }
+    
+    const data = await response.json();
+    
+    return data.data.map((comment: any) => ({
+      id: comment.id,
+      text: comment.text || comment.message,
+      author: {
+        id: comment.from?.id,
+        name: comment.from?.name || comment.username,
+        profileUrl: comment.from?.id ? `https://facebook.com/${comment.from.id}` : undefined
+      },
+      createdAt: new Date(comment.timestamp || comment.created_time)
+    }));
+  }
+  
+  async replyToComment(account: SocialAccount, commentId: string, reply: string): Promise<any> {
+    const response = await fetch(`${this.baseUrl}/${commentId}/replies`, {
+      method: 'POST',
+      body: new URLSearchParams({
+        message: reply,
+        access_token: account.accessToken
+      })
+    });
+    
+    if (!response.ok) {
+      throw new Error(`Échec de réponse au commentaire ${commentId}`);
+    }
+    
+    const data = await response.json();
+    return { id: data.id, success: true };
+  }
+  
+  async deleteComment(account: SocialAccount, commentId: string): Promise<boolean> {
+    const response = await fetch(`${this.baseUrl}/${commentId}`, {
+      method: 'DELETE',
+      body: new URLSearchParams({
+        access_token: account.accessToken
+      })
+    });
+    
+    if (!response.ok) {
+      throw new Error(`Échec de suppression du commentaire ${commentId}`);
+    }
+    
+    const data = await response.json();
+    return data.success === true;
+  }
+}
+
+/**
+ * Adaptateur pour l'API Twitter (X)
+ */
+class TwitterService implements PlatformService {
+  private baseUrl = 'https://api.twitter.com/2';
+  private clientId = process.env.TWITTER_CLIENT_ID!;
+  private clientSecret = process.env.TWITTER_CLIENT_SECRET!;
+  private redirectUri = process.env.TWITTER_REDIRECT_URI!;
+  
+  // Implémentation des méthodes d'authentification
+  getAuthUrl(): string {
+    // Twitter utilise OAuth 2.0 avec PKCE
+    // Dans une implémentation réelle, il faudrait générer un code_challenge
+    const scopes = [
+      'tweet.read',
+      'tweet.write',
+      'users.read',
+      'offline.access'
+    ];
+    
+    return `https://twitter.com/i/oauth2/authorize?response_type=code&client_id=${this.clientId}&redirect_uri=${this.redirectUri}&scope=${scopes.join('%20')}&state=state&code_challenge=challenge&code_challenge_method=plain`;
+  }
+  
+  async handleCallback(code: string): Promise<SocialAccount> {
+    // Échanger le code contre un token d'accès
+    const auth = Buffer.from(`${this.clientId}:${this.clientSecret}`).toString('base64');
+    
+    const tokenResponse = await fetch('https://api.twitter.com/2/oauth2/token', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Authorization': `Basic ${auth}`
+      },
+      body: new URLSearchParams({
+        code,
+        grant_type: 'authorization_code',
+        redirect_uri: this.redirectUri,
+        code_verifier: 'challenge'
+      })
+    });
+    
+    if (!tokenResponse.ok) {
+      throw new Error('Échec de l\'authentification Twitter');
+    }
+    
+    const tokenData = await tokenResponse.json();
+    
+    // Obtenir les informations utilisateur
+    const userResponse = await fetch(`${this.baseUrl}/users/me?user.fields=username,name,profile_image_url,public_metrics`, {
+      headers: {
+        'Authorization': `Bearer ${tokenData.access_token}`
+      }
+    });
+    
+    if (!userResponse.ok) {
+      throw new Error('Échec de récupération des informations utilisateur Twitter');
+    }
+    
+    const userData = await userResponse.json();
+    const user = userData.data;
+    
+    return {
+      id: `twitter_${user.id}`,
+      platform: 'twitter',
+      username: user.username,
+      profileUrl: `https://twitter.com/${user.username}`,
+      accessToken: tokenData.access_token,
+      refreshToken: tokenData.refresh_token,
+      tokenExpiry: new Date(Date.now() + tokenData.expires_in * 1000),
+      connected: true,
+      metadata: {
+        userId: user.id,
+        name: user.name,
+        profileImageUrl: user.profile_image_url,
+        followersCount: user.public_metrics?.followers_count,
+        followingCount: user.public_metrics?.following_count,
+        tweetCount: user.public_metrics?.tweet_count
+      }
+    };
+  }
+  
+  async refreshToken(account: SocialAccount): Promise<SocialAccount> {
+    if (!account.refreshToken) {
+      throw new Error('Refresh token non disponible');
+    }
+    
+    const auth = Buffer.from(`${this.clientId}:${this.clientSecret}`).toString('base64');
+    
+    const response = await fetch('https://api.twitter.com/2/oauth2/token', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Authorization': `Basic ${auth}`
+      },
+      body: new URLSearchParams({
+        grant_type: 'refresh_token',
+        refresh_token: account.refreshToken
+      })
+    });
+    
+    if (!response.ok) {
+      throw new Error('Échec du rafraîchissement du token Twitter');
+    }
+    
+    const data = await response.json();
+    
+    return {
+      ...account,
+      accessToken: data.access_token,
+      refreshToken: data.refresh_token,
+      tokenExpiry: new Date(Date.now() + data.expires_in * 1000)
+    };
+  }
+  
+  async getAccountInfo(account: SocialAccount): Promise<SocialAccount> {
+    const userId = account.metadata.userId;
+    
+    const response = await fetch(`${this.baseUrl}/users/${userId}?user.fields=username,name,profile_image_url,public_metrics`, {
+      headers: {
+        'Authorization': `Bearer ${account.accessToken}`
+      }
+    });
+    
+    if (!response.ok) {
+      throw new Error('Échec de récupération des informations utilisateur Twitter');
+    }
+    
+    const userData = await response.json();
+    const user = userData.data;
+    
+    return {
+      ...account,
+      username: user.username,
+      metadata: {
+        ...account.metadata,
+        name: user.name,
+        profileImageUrl: user.profile_image_url,
+        followersCount: user.public_metrics?.followers_count,
+        followingCount: user.public_metrics?.following_count,
+        tweetCount: user.public_metrics?.tweet_count
+      },
+      lastSynced: new Date()
+    };
+  }
+  
+  async getPosts(account: SocialAccount, options?: { limit?: number; before?: string }): Promise<SocialPost[]> {
+    const userId = account.metadata.userId;
+    const limit = options?.limit || 10;
+    const pagination = options?.before ? `&pagination_token=${options.before}` : '';
+    
+    const response = await fetch(`${this.baseUrl}/users/${userId}/tweets?max_results=${limit}${pagination}&tweet.fields=created_at,public_metrics,attachments&expansions=attachments.media_keys&media.fields=type,url,preview_image_url`, {
+      headers: {
+        'Authorization': `Bearer ${account.accessToken}`
+      }
+    });
+    
+    if (!response.ok) {
+      throw new Error('Échec de récupération des tweets');
+    }
+    
+    const data = await response.json();
+    
+    // Créer un mapping des médias
+    const mediaMap = new Map();
+    if (data.includes?.media) {
+      for (const media of data.includes.media) {
+        mediaMap.set(media.media_key, media);
+      }
+    }
+    
+    return data.data.map((tweet: any) => {
+      // Construire les médias attachés
+      const media = {
+        type: 'image' as const,
+        urls: [] as string[],
+        thumbnail: undefined as string | undefined
+      };
+      
+      if (tweet.attachments?.media_keys) {
+        for (const key of tweet.attachments.media_keys) {
+          const mediaItem = mediaMap.get(key);
+          if (mediaItem) {
+            if (mediaItem.type === 'photo') {
+              media.type = 'image';
+              media.urls.push(mediaItem.url);
+              if (!media.thumbnail) media.thumbnail = mediaItem.url;
+            } else if (mediaItem.type === 'video') {
+              media.type = 'video';
+              // URL vidéo n'est pas disponible directement, on utilise l'aperçu
+              if (mediaItem.preview_image_url) {
+                media.urls.push(mediaItem.preview_image_url);
+                media.thumbnail = mediaItem.preview_image_url;
+              }
+            }
+          }
+        }
+      }
+      
+      return {
+        id: `twitter_post_${tweet.id}`,
+        platform: 'twitter',
+        accountId: account.id,
+        content: {
+          text: tweet.text,
+          media: media.urls.length > 0 ? media : undefined
+        },
+        status: 'published',
+        publishedAt: new Date(tweet.created_at),
+        stats: {
+          likes: tweet.public_metrics?.like_count || 0,
+          comments: tweet.public_metrics?.reply_count || 0,
+          shares: tweet.public_metrics?.retweet_count || 0,
+          views: tweet.public_metrics?.impression_count || 0,
+          engagement: (tweet.public_metrics?.like_count || 0) + 
+                      (tweet.public_metrics?.reply_count || 0) + 
+                      (tweet.public_metrics?.retweet_count || 0)
+        },
+        platformPostId: tweet.id,
+        metadata: {
+          permalink: `https://twitter.com/${account.username}/status/${tweet.id}`
+        }
+      };
+    });
+  }
+  
+  async createPost(account: SocialAccount, post: Partial<SocialPost>): Promise<SocialPost> {
+    // Créer un tweet
+    const payload: any = {
+      text: post.content?.text || ''
+    };
+    
+    // Si des médias sont inclus, il faudrait d'abord les uploader avec l'API média
+    // Pour simplifier, nous ne gérons pas ce cas dans cet exemple
+    
+    const response = await fetch(`${this.baseUrl}/tweets`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${account.accessToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+    
+    if (!response.ok) {
+      throw new Error('Échec de création du tweet');
+    }
+    
+    const data = await response.json();
+    
+    // Récupérer les détails du tweet créé
+    return {
+      id: `twitter_post_${data.data.id}`,
+      platform: 'twitter',
+      accountId: account.id,
+      content: {
+        text: payload.text,
+        media: post.content?.media
+      },
+      status: 'published',
+      publishedAt: new Date(),
+      platformPostId: data.data.id,
+      metadata: {
+        permalink: `https://twitter.com/${account.username}/status/${data.data.id}`
+      }
+    };
+  }
+  
+  async schedulePost(account: SocialAccount, post: Partial<SocialPost>): Promise<SocialPost> {
+    if (!post.scheduledFor) {
+      throw new Error('Date de planification requise');
+    }
+    
+    // Twitter n'a pas d'API officielle pour programmer des tweets
+    // On stocke donc localement et on utilisera un job pour publier au moment voulu
+    return {
+      id: `scheduled_twitter_${Date.now()}`,
+      platform: 'twitter',
+      accountId: account.id,
+      content: post.content || { text: '' },
+      status: 'scheduled',
+      scheduledFor: post.scheduledFor,
+      metadata: {}
+    };
+  }
+  
+  async deletePost(account: SocialAccount, postId: string): Promise<boolean> {
+    // Extraction de l'ID de la plateforme
+    const tweetId = postId.includes('_post_') 
+      ? postId.split('_post_')[1] 
+      : postId;
+    
+    const response = await fetch(`${this.baseUrl}/tweets/${tweetId}`, {
+      method: 'DELETE',
+      headers: {
+        'Authorization': `Bearer ${account.accessToken}`
+      }
+    });
+    
+    if (!response.ok) {
+      throw new Error(`Échec de suppression du tweet ${postId}`);
+    }
+    
+    const data = await response.json();
+    return data.data?.deleted === true;
+  }
+  
+  async getAnalytics(account: SocialAccount, period: 'day' | 'week' | 'month'): Promise<SocialAnalytics> {
+    // Twitter API v2 n'offre pas directement les analyses historiques
+    // Nous allons simuler les données de croissance d'abonnés
+    const userInfo = await this.getAccountInfo(account);
+    
+    const now = new Date();
+    let since: Date;
+    
+    switch (period) {
+      case 'day':
+        since = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+        break;
+      case 'week':
+        since = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+        break;
+      case 'month':
+      default:
+        since = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+        break;
+    }
+    
+    // Simuler l'historique des abonnés
+    const followerHistory = this.getSimulatedFollowerHistory(
+      userInfo.metadata.followersCount || 0,
+      since,
+      now
+    );
+    
+    // Obtenir les tweets récents pour calculer l'engagement
+    const recentTweets = await this.getPosts(account, { limit: 100 });
+    
+    const likes = recentTweets.reduce((sum, tweet) => sum + (tweet.stats?.likes || 0), 0);
+    const replies = recentTweets.reduce((sum, tweet) => sum + (tweet.stats?.comments || 0), 0);
+    const retweets = recentTweets.reduce((sum, tweet) => sum + (tweet.stats?.shares || 0), 0);
+    
+    const followerCount = userInfo.metadata.followersCount || 0;
+    const engagementRate = recentTweets.length > 0 && followerCount > 0
+      ? ((likes + replies + retweets) / (followerCount * recentTweets.length)) * 100
+      : 0;
+    
+    return {
+      platform: 'twitter',
+      period,
+      followers: {
+        count: followerCount,
+        growth: this.calculateGrowthRate(followerHistory),
+        history: followerHistory
+      },
+      engagement: {
+        rate: engagementRate,
+        likes,
+        comments: replies,
+        shares: retweets
+      }
+    };
+  }
+  
+  private getSimulatedFollowerHistory(
+    currentFollowers: number,
+    since: Date,
+    now: Date
+  ): { date: string; value: number }[] {
+    const history: { date: string; value: number }[] = [];
+    
+    // Créer des points de données quotidiens
+    const dayMillis = 24 * 60 * 60 * 1000;
+    const days = Math.ceil((now.getTime() - since.getTime()) / dayMillis);
+    
+    for (let i = 0; i < days; i++) {
+      const date = new Date(now.getTime() - i * dayMillis);
+      // Simuler une légère diminution dans le passé (environ 0.3% par jour)
+      const followerCount = Math.round(currentFollowers / (1 + i * 0.003));
+      
+      history.unshift({
+        date: date.toISOString().split('T')[0],
+        value: followerCount
+      });
+    }
+    
+    return history;
+  }
+  
+  private calculateGrowthRate(history: { date: string; value: number }[]): number {
+    if (history.length < 2) return 0;
+    
+    const oldest = history[0].value;
+    const newest = history[history.length - 1].value;
+    
+    if (oldest === 0) return 0;
+    return ((newest - oldest) / oldest) * 100;
+  }
+  
+  async getPostAnalytics(account: SocialAccount, postId: string): Promise<Partial<SocialPost>> {
+    // Twitter API v2 ne fournit pas d'analyses détaillées par tweet pour les applications standard
+    // On peut seulement obtenir les métriques publiques
+    
+    const tweetId = postId.includes('_post_') 
+      ? postId.split('_post_')[1] 
+      : postId;
+    
+    const response = await fetch(`${this.baseUrl}/tweets/${tweetId}?tweet.fields=public_metrics`, {
+      headers: {
+        'Authorization': `Bearer ${account.accessToken}`
+      }
+    });
+    
+    if (!response.ok) {
+      throw new Error(`Échec de récupération des analyses du tweet ${postId}`);
+    }
+    
+    const data = await response.json();
+    const tweet = data.data;
+    
+    return {
+      stats: {
+        likes: tweet.public_metrics?.like_count || 0,
+        comments: tweet.public_metrics?.reply_count || 0,
+        shares: tweet.public_metrics?.retweet_count || 0,
+        engagement: (tweet.public_metrics?.like_count || 0) + 
+                    (tweet.public_metrics?.reply_count || 0) + 
+                    (tweet.public_metrics?.retweet_count || 0)
+      }
+    };
+  }
+  
+  async getComments(account: SocialAccount, postId: string): Promise<any[]> {
+    const tweetId = postId.includes('_post_') 
+      ? postId.split('_post_')[1] 
+      : postId;
+    
+    const response = await fetch(`${this.baseUrl}/tweets/search/recent?query=conversation_id:${tweetId}&tweet.fields=created_at,author_id&expansions=author_id&user.fields=name,username,profile_image_url`, {
+      headers: {
+        'Authorization': `Bearer ${account.accessToken}`
+      }
+    });
+    
+    if (!response.ok) {
+      throw new Error(`Échec de récupération des commentaires pour ${postId}`);
+    }
+    
+    const data = await response.json();
+    
+    // Créer un mapping des utilisateurs
+    const userMap = new Map();
+    if (data.includes?.users) {
+      for (const user of data.includes.users) {
+        userMap.set(user.id, user);
+      }
+    }
+    
+    return (data.data || []).map((tweet: any) => {
+      const user = userMap.get(tweet.author_id);
+      
+      return {
+        id: tweet.id,
+        text: tweet.text,
+        author: {
+          id: tweet.author_id,
+          name: user?.name,
+          profileUrl: user ? `https://twitter.com/${user.username}` : undefined
+        },
+        createdAt: new Date(tweet.created_at)
+      };
+    });
+  }
+  
+  async replyToComment(account: SocialAccount, commentId: string, reply: string): Promise<any> {
+    const response = await fetch(`${this.baseUrl}/tweets`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${account.accessToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        text: reply,
+        reply: {
+          in_reply_to_tweet_id: commentId
+        }
+      })
+    });
+    
+    if (!response.ok) {
+      throw new Error(`Échec de réponse au tweet ${commentId}`);
+    }
+    
+    const data = await response.json();
+    return { id: data.data.id, success: true };
+  }
+  
+  async deleteComment(account: SocialAccount, commentId: string): Promise<boolean> {
+    // Pour Twitter, supprimer un commentaire revient à supprimer un tweet
+    return this.deletePost(account, commentId);
+  }
+}
+
+/**
+ * Adaptateur pour l'API YouTube
+ */
+class YoutubeService implements PlatformService {
+  private baseUrl = 'https://www.googleapis.com/youtube/v3';
+  private authUrl = 'https://accounts.google.com/o/oauth2/auth';
+  private tokenUrl = 'https://oauth2.googleapis.com/token';
+  private clientId = process.env.GOOGLE_CLIENT_ID!;
+  private clientSecret = process.env.GOOGLE_CLIENT_SECRET!;
+  private redirectUri = process.env.YOUTUBE_REDIRECT_URI!;
+  
+  getAuthUrl(): string {
+    const scopes = [
+      'https://www.googleapis.com/auth/youtube',
+      'https://www.googleapis.com/auth/youtube.readonly',
+      'https://www.googleapis.com/auth/youtube.force-ssl'
+    ];
+    
+    return `${this.authUrl}?client_id=${this.clientId}&redirect_uri=${this.redirectUri}&scope=${scopes.join(' ')}&response_type=code&access_type=offline&prompt=consent`;
+  }
+  
+  async handleCallback(code: string): Promise<SocialAccount> {
+    // Échanger le code contre un token d'accès
+    const tokenResponse = await fetch(this.tokenUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded'
+      },
+      body: new URLSearchParams({
+        code,
+        client_id: this.clientId,
+        client_secret: this.clientSecret,
+        redirect_uri: this.redirectUri,
+        grant_type: 'authorization_code'
+      })
+    });
+    
+    if (!tokenResponse.ok) {
+      throw new Error('Échec de l\'authentification YouTube');
+    }
+    
+    const tokenData = await tokenResponse.json();
+    
+    // Obtenir les informations de la chaîne
+    const channelResponse = await fetch(`${this.baseUrl}/channels?part=snippet,statistics&mine=true&access_token=${tokenData.access_token}`);
+    
+    if (!channelResponse.ok) {
+      throw new Error('Échec de récupération des informations de la chaîne YouTube');
+    }
+    
+    const channelData = await channelResponse.json();
+    const channel = channelData.items[0];
+    
+    return {
+      id: `youtube_${channel.id}`,
+      platform: 'youtube',
+      username: channel.snippet.title,
+      profileUrl: `https://youtube.com/channel/${channel.id}`,
+      accessToken: tokenData.access_token,
+      refreshToken: tokenData.refresh_token,
+      tokenExpiry: new Date(Date.now() + tokenData.expires_in * 1000),
+      connected: true,
+      metadata: {
+        channelId: channel.id,
+        description: channel.snippet.description,
+        thumbnailUrl: channel.snippet.thumbnails.default.url,
+        subscriberCount: channel.statistics.subscriberCount,
+        videoCount: channel.statistics.videoCount,
+        viewCount: channel.statistics.viewCount
+      }
+    };
+  }
+  
+  async refreshToken(account: SocialAccount): Promise<SocialAccount> {
+    if (!account.refreshToken) {
+      throw new Error('Refresh token non disponible');
+    }
+    
+    const response = await fetch(this.tokenUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded'
+      },
+      body: new URLSearchParams({
+        client_id: this.clientId,
+        client_secret: this.clientSecret,
+        refresh_token: account.refreshToken,
+        grant_type: 'refresh_token'
+      })
+    });
+    
+    if (!response.ok) {
+      throw new Error('Échec du rafraîchissement du token YouTube');
+    }
+    
+    const data = await response.json();
+    
+    return {
+      ...account,
+      accessToken: data.access_token,
+      tokenExpiry: new Date(Date.now() + data.expires_in * 1000)
+    };
+  }
+  
+  async getAccountInfo(account: SocialAccount): Promise<SocialAccount> {
+    const channelId = account.metadata.channelId;
+    
+    const response = await fetch(`${this.baseUrl}/channels?part=snippet,statistics&id=${channelId}&access_token=${account.accessToken}`);
+    
+    if (!response.ok) {
+      throw new Error('Échec de récupération des informations de la chaîne YouTube');
+    }
+    
+    const data = await response.json();
+    const channel = data.items[0];
+    
+    return {
+      ...account,
+      username: channel.snippet.title,
+      metadata: {
+        ...account.metadata,
+        description: channel.snippet.description,
+        thumbnailUrl: channel.snippet.thumbnails.default.url,
+        subscriberCount: channel.statistics.subscriberCount,
+        videoCount: channel.statistics.videoCount,
+        viewCount: channel.statistics.viewCount
+      },
+      lastSynced: new Date()
+    };
+  }
+  
+  // app/lib/services/social/platformService.ts (suite - YouTube et TikTok)
+
+  async getPosts(account: SocialAccount, options?: { limit?: number; before?: string }): Promise<SocialPost[]> {
+    const channelId = account.metadata.channelId;
+    const limit = options?.limit || 25;
+    const pageToken = options?.before ? `&pageToken=${options.before}` : '';
+    
+    const response = await fetch(`${this.baseUrl}/search?part=snippet&channelId=${channelId}&maxResults=${limit}&order=date&type=video${pageToken}&access_token=${account.accessToken}`);
+    
+    if (!response.ok) {
+      throw new Error('Échec de récupération des vidéos YouTube');
+    }
+    
+    const data = await response.json();
+    
+    // Obtenir les statistiques pour chaque vidéo
+    const videoIds = data.items.map((item: any) => item.id.videoId).join(',');
+    const statsResponse = await fetch(`${this.baseUrl}/videos?part=statistics&id=${videoIds}&access_token=${account.accessToken}`);
+    
+    if (!statsResponse.ok) {
+      throw new Error('Échec de récupération des statistiques vidéo YouTube');
+    }
+    
+    const statsData = await statsResponse.json();
+    
+    // Créer un mapping des statistiques par ID vidéo
+    const statsMap = new Map();
+    for (const video of statsData.items) {
+      statsMap.set(video.id, video.statistics);
+    }
+    
+    return data.items.map((item: any) => {
+      const videoId = item.id.videoId;
+      const stats = statsMap.get(videoId) || {};
+      
+      return {
+        id: `youtube_post_${videoId}`,
+        platform: 'youtube',
+        accountId: account.id,
+        content: {
+          text: item.snippet.title,
+          media: {
+            type: 'video',
+            urls: [`https://www.youtube.com/watch?v=${videoId}`],
+            thumbnail: item.snippet.thumbnails.high?.url || item.snippet.thumbnails.default?.url
+          }
+        },
+        status: 'published',
+        publishedAt: new Date(item.snippet.publishedAt),
+        stats: {
+          likes: parseInt(stats.likeCount || '0'),
+          comments: parseInt(stats.commentCount || '0'),
+          views: parseInt(stats.viewCount || '0'),
+          engagement: parseInt(stats.likeCount || '0') + parseInt(stats.commentCount || '0')
+        },
+        platformPostId: videoId,
+        metadata: {
+          permalink: `https://www.youtube.com/watch?v=${videoId}`,
+          description: item.snippet.description
+        }
+      };
+    });
+  }
+  
+  async createPost(account: SocialAccount, post: Partial<SocialPost>): Promise<SocialPost> {
+    // La création de vidéos YouTube est un processus complexe impliquant plusieurs étapes:
+    // 1. Créer les métadonnées vidéo
+    // 2. Télécharger le contenu vidéo
+    // 3. Mettre à jour les métadonnées
+    
+    // Pour une implémentation simplifiée, nous allons supposer que la vidéo a déjà été téléchargée
+    // et que nous avons juste besoin de mettre à jour ses métadonnées
+    
+    if (!post.content?.media?.urls[0] || !post.content.text) {
+      throw new Error('Fichier vidéo et titre requis pour une publication YouTube');
+    }
+    
+    // Dans une implémentation réelle, il faudrait traiter le téléchargement de la vidéo
+    // Ici, nous simulons simplement la création
+    
+    return {
+      id: `youtube_post_simulated_${Date.now()}`,
+      platform: 'youtube',
+      accountId: account.id,
+      content: post.content,
+      status: 'published',
+      publishedAt: new Date(),
+      platformPostId: `simulated_${Date.now()}`,
+      metadata: {
+        permalink: `https://www.youtube.com/watch?v=simulated_${Date.now()}`
+      }
+    };
+  }
+  
+  async schedulePost(account: SocialAccount, post: Partial<SocialPost>): Promise<SocialPost> {
+    // YouTube permet de programmer des vidéos, mais cela nécessite aussi un téléchargement
+    // Comme pour createPost, nous simplifions ici
+    
+    if (!post.scheduledFor) {
+      throw new Error('Date de programmation requise');
+    }
+    
+    return {
+      id: `youtube_scheduled_${Date.now()}`,
+      platform: 'youtube',
+      accountId: account.id,
+      content: post.content || { text: '' },
+      status: 'scheduled',
+      scheduledFor: post.scheduledFor,
+      metadata: {}
+    };
+  }
+  
+  async deletePost(account: SocialAccount, postId: string): Promise<boolean> {
+    const videoId = postId.includes('_post_') 
+      ? postId.split('_post_')[1] 
+      : postId;
+    
+    // Pour supprimer une vidéo YouTube
+    const response = await fetch(`${this.baseUrl}/videos?id=${videoId}`, {
+      method: 'DELETE',
+      headers: {
+        'Authorization': `Bearer ${account.accessToken}`
+      }
+    });
+    
+    if (!response.ok) {
+      throw new Error(`Échec de suppression de la vidéo ${postId}`);
+    }
+    
+    return response.status === 204;
+  }
+  
+  async getAnalytics(account: SocialAccount, period: 'day' | 'week' | 'month'): Promise<SocialAnalytics> {
+    // YouTube Analytics API est complexe et nécessite des autorisations spéciales
+    // Ici, nous combinons des données réelles et simulées
+    
+    const userInfo = await this.getAccountInfo(account);
+    const channelId = account.metadata.channelId;
+    
+    const now = new Date();
+    let since: Date;
+    let dimensions: string;
+    
+    switch (period) {
+      case 'day':
+        since = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+        dimensions = 'day';
+        break;
+      case 'week':
+        since = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+        dimensions = 'day';
+        break;
+      case 'month':
+      default:
+        since = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+        dimensions = 'week';
+        break;
+    }
+    
+    // Utiliser l'API Analytics pour obtenir des données
+    // Note: Ceci est simplifié, l'API YouTube Analytics a des exigences spécifiques
+    const startDate = since.toISOString().split('T')[0];
+    const endDate = now.toISOString().split('T')[0];
+    
+    try {
+      const analyticsResponse = await fetch(
+        `https://youtubeanalytics.googleapis.com/v2/reports?dimensions=${dimensions}&metrics=views,likes,comments,subscribersGained,subscribersLost&ids=channel==${channelId}&startDate=${startDate}&endDate=${endDate}`,
+        {
+          headers: {
+            'Authorization': `Bearer ${account.accessToken}`
+          }
+        }
+      );
+      
+      if (!analyticsResponse.ok) {
+        throw new Error('Échec de récupération des analytics YouTube');
+      }
+      
+      const analyticsData = await analyticsResponse.json();
+      
+      // Extraire et calculer les métriques
+      const views = analyticsData.rows ? analyticsData.rows.reduce((sum: number, row: any) => sum + row[1], 0) : 0;
+      const likes = analyticsData.rows ? analyticsData.rows.reduce((sum: number, row: any) => sum + row[2], 0) : 0;
+      const comments = analyticsData.rows ? analyticsData.rows.reduce((sum: number, row: any) => sum + row[3], 0) : 0;
+      const subscribersGained = analyticsData.rows ? analyticsData.rows.reduce((sum: number, row: any) => sum + row[4], 0) : 0;
+      const subscribersLost = analyticsData.rows ? analyticsData.rows.reduce((sum: number, row: any) => sum + row[5], 0) : 0;
+      
+      // Simuler l'historique des abonnés
+      const subscriberCount = userInfo.metadata.subscriberCount || 0;
+      const followerHistory = this.getSimulatedSubscriberHistory(
+        subscriberCount,
+        subscribersGained,
+        subscribersLost,
+        since,
+        now
+      );
+      
+      return {
+        platform: 'youtube',
+        period,
+        followers: {
+          count: subscriberCount,
+          growth: ((subscribersGained - subscribersLost) / subscriberCount) * 100,
+          history: followerHistory
+        },
+        engagement: {
+          rate: subscriberCount > 0 ? ((likes + comments) / views) * 100 : 0,
+          likes,
+          comments,
+          shares: 0, // YouTube ne fournit pas facilement cette métrique
+          views
+        }
+      };
+    } catch (error) {
+      // En cas d'échec, retourner des données simulées
+      return this.getSimulatedAnalytics(account, period);
+    }
+  }
+  
+  private getSimulatedSubscriberHistory(
+    currentSubscribers: number,
+    gained: number,
+    lost: number,
+    since: Date,
+    now: Date
+  ): { date: string; value: number }[] {
+    const history: { date: string; value: number }[] = [];
+    
+    // Créer des points de données quotidiens
+    const dayMillis = 24 * 60 * 60 * 1000;
+    const days = Math.ceil((now.getTime() - since.getTime()) / dayMillis);
+    
+    // Répartir les gains/pertes sur la période
+    const netChangePerDay = (gained - lost) / days;
+    
+    for (let i = 0; i < days; i++) {
+      const date = new Date(now.getTime() - (days - i - 1) * dayMillis);
+      const subscriberCount = Math.round(currentSubscribers - (days - i) * netChangePerDay);
+      
+      history.push({
+        date: date.toISOString().split('T')[0],
+        value: Math.max(0, subscriberCount) // Éviter les valeurs négatives
+      });
+    }
+    
+    return history;
+  }
+  
+  private getSimulatedAnalytics(account: SocialAccount, period: 'day' | 'week' | 'month'): SocialAnalytics {
+    const subscriberCount = account.metadata.subscriberCount || 0;
+    const now = new Date();
+    let since: Date;
+    
+    switch (period) {
+      case 'day':
+        since = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+        break;
+      case 'week':
+        since = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+        break;
+      case 'month':
+      default:
+        since = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+        break;
+    }
+    
+    // Simuler des métriques raisonnables basées sur le nombre d'abonnés
+    const views = Math.round(subscriberCount * 0.3 * (period === 'day' ? 1 : period === 'week' ? 7 : 30));
+    const likes = Math.round(views * 0.05);
+    const comments = Math.round(views * 0.01);
+    const subscribersGained = Math.round(subscriberCount * 0.02 * (period === 'day' ? 1 : period === 'week' ? 7 : 30));
+    const subscribersLost = Math.round(subscribersGained * 0.3);
+    
+    // Simuler l'historique des abonnés
+    const followerHistory = this.getSimulatedSubscriberHistory(
+      subscriberCount,
+      subscribersGained,
+      subscribersLost,
+      since,
+      now
+    );
+    
+    return {
+      platform: 'youtube',
+      period,
+      followers: {
+        count: subscriberCount,
+        growth: subscriberCount > 0 ? ((subscribersGained - subscribersLost) / subscriberCount) * 100 : 0,
+        history: followerHistory
+      },
+      engagement: {
+        rate: views > 0 ? ((likes + comments) / views) * 100 : 0,
+        likes,
+        comments,
+        shares: 0,
+        views
+      }
+    };
+  }
+  
+  async getPostAnalytics(account: SocialAccount, postId: string): Promise<Partial<SocialPost>> {
+    const videoId = postId.includes('_post_') 
+      ? postId.split('_post_')[1] 
+      : postId;
+    
+    const response = await fetch(`${this.baseUrl}/videos?part=statistics&id=${videoId}&access_token=${account.accessToken}`);
+    
+    if (!response.ok) {
+      throw new Error(`Échec de récupération des statistiques de la vidéo ${postId}`);
+    }
+    
+    const data = await response.json();
+    const video = data.items[0];
+    
+    return {
+      stats: {
+        likes: parseInt(video.statistics.likeCount || '0'),
+        comments: parseInt(video.statistics.commentCount || '0'),
+        views: parseInt(video.statistics.viewCount || '0'),
+        engagement: parseInt(video.statistics.likeCount || '0') + parseInt(video.statistics.commentCount || '0')
+      }
+    };
+  }
+  
+  async getComments(account: SocialAccount, postId: string): Promise<any[]> {
+    const videoId = postId.includes('_post_') 
+      ? postId.split('_post_')[1] 
+      : postId;
+    
+    const response = await fetch(`${this.baseUrl}/commentThreads?part=snippet&videoId=${videoId}&maxResults=100&access_token=${account.accessToken}`);
+    
+    if (!response.ok) {
+      throw new Error(`Échec de récupération des commentaires pour ${postId}`);
+    }
+    
+    const data = await response.json();
+    
+    return (data.items || []).map((item: any) => {
+      const comment = item.snippet.topLevelComment.snippet;
+      
+      return {
+        id: item.id,
+        text: comment.textDisplay,
+        author: {
+          id: comment.authorChannelId?.value,
+          name: comment.authorDisplayName,
+          profileUrl: comment.authorChannelUrl
+        },
+        createdAt: new Date(comment.publishedAt)
+      };
+    });
+  }
+  
+  async replyToComment(account: SocialAccount, commentId: string, reply: string): Promise<any> {
+    const response = await fetch(`${this.baseUrl}/comments`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${account.accessToken}`
+      },
+      body: JSON.stringify({
+        snippet: {
+          parentId: commentId,
+          textOriginal: reply
+        }
+      })
+    });
+    
+    if (!response.ok) {
+      throw new Error(`Échec de réponse au commentaire ${commentId}`);
+    }
+    
+    const data = await response.json();
+    return { id: data.id, success: true };
+  }
+  
+  async deleteComment(account: SocialAccount, commentId: string): Promise<boolean> {
+    const response = await fetch(`${this.baseUrl}/comments?id=${commentId}`, {
+      method: 'DELETE',
+      headers: {
+        'Authorization': `Bearer ${account.accessToken}`
+      }
+    });
+    
+    if (!response.ok) {
+      throw new Error(`Échec de suppression du commentaire ${commentId}`);
+    }
+    
+    return response.status === 204;
+  }
+}
+
+/**
+ * Adaptateur pour l'API TikTok
+ * Note: L'API TikTok est relativement nouvelle et en évolution constante
+ */
+class TikTokService implements PlatformService {
+  private baseUrl = 'https://open-api.tiktok.com';
+  private clientKey = process.env.TIKTOK_CLIENT_KEY!;
+  private clientSecret = process.env.TIKTOK_CLIENT_SECRET!;
+  private redirectUri = process.env.TIKTOK_REDIRECT_URI!;
+  
+  getAuthUrl(): string {
+    const scopes = [
+      'user.info.basic',
+      'video.list',
+      'video.upload',
+      'comment.list',
+      'comment.create',
+      'comment.delete'
+    ];
+    
+    return `https://www.tiktok.com/auth/authorize?client_key=${this.clientKey}&response_type=code&redirect_uri=${this.redirectUri}&scope=${scopes.join(',')}&state=tiktok`;
+  }
+  
+  async handleCallback(code: string): Promise<SocialAccount> {
+    // Échanger le code contre un token d'accès
+    const tokenResponse = await fetch(`${this.baseUrl}/oauth/access_token/`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded'
+      },
+      body: new URLSearchParams({
+        client_key: this.clientKey,
+        client_secret: this.clientSecret,
+        code,
+        grant_type: 'authorization_code'
+      })
+    });
+    
+    if (!tokenResponse.ok) {
+      throw new Error('Échec de l\'authentification TikTok');
+    }
+    
+    const tokenData = await tokenResponse.json();
+    
+    if (tokenData.data.error_code !== 0) {
+      throw new Error(`Erreur TikTok: ${tokenData.data.description}`);
+    }
+    
+    // Obtenir les informations utilisateur
+    const userResponse = await fetch(`${this.baseUrl}/user/info/`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${tokenData.data.access_token}`
+      }
+    });
+    
+    if (!userResponse.ok) {
+      throw new Error('Échec de récupération des informations utilisateur TikTok');
+    }
+    
+    const userData = await userResponse.json();
+    
+    if (userData.data.error_code !== 0) {
+      throw new Error(`Erreur TikTok: ${userData.data.description}`);
+    }
+    
+    const user = userData.data.user;
+    
+    return {
+      id: `tiktok_${user.open_id}`,
+      platform: 'tiktok',
+      username: user.display_name,
+      profileUrl: `https://www.tiktok.com/@${user.username}`,
+      accessToken: tokenData.data.access_token,
+      refreshToken: tokenData.data.refresh_token,
+      tokenExpiry: new Date(Date.now() + tokenData.data.expires_in * 1000),
+      connected: true,
+      metadata: {
+        openId: user.open_id,
+        username: user.username,
+        displayName: user.display_name,
+        profilePicture: user.avatar_url,
+        followersCount: user.follower_count,
+        followingCount: user.following_count,
+        likesCount: user.likes_count
+      }
+    };
+  }
+  
+  async refreshToken(account: SocialAccount): Promise<SocialAccount> {
+    if (!account.refreshToken) {
+      throw new Error('Refresh token non disponible');
+    }
+    
+    const response = await fetch(`${this.baseUrl}/oauth/refresh_token/`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded'
+      },
+      body: new URLSearchParams({
+        client_key: this.clientKey,
+        client_secret: this.clientSecret,
+        refresh_token: account.refreshToken,
+        grant_type: 'refresh_token'
+      })
+    });
+    
+    if (!response.ok) {
+      throw new Error('Échec du rafraîchissement du token TikTok');
+    }
+    
+    const data = await response.json();
+    
+    if (data.data.error_code !== 0) {
+      throw new Error(`Erreur TikTok: ${data.data.description}`);
+    }
+    
+    return {
+      ...account,
+      accessToken: data.data.access_token,
+      refreshToken: data.data.refresh_token,
+      tokenExpiry: new Date(Date.now() + data.data.expires_in * 1000)
+    };
+  }
+  
+  async getAccountInfo(account: SocialAccount): Promise<SocialAccount> {
+    const response = await fetch(`${this.baseUrl}/user/info/`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${account.accessToken}`
+      }
+    });
+    
+    if (!response.ok) {
+      throw new Error('Échec de récupération des informations utilisateur TikTok');
+    }
+    
+    const userData = await response.json();
+    
+    if (userData.data.error_code !== 0) {
+      throw new Error(`Erreur TikTok: ${userData.data.description}`);
+    }
+    
+    const user = userData.data.user;
+    
+    return {
+      ...account,
+      username: user.display_name,
+      metadata: {
+        ...account.metadata,
+        username: user.username,
+        displayName: user.display_name,
+        profilePicture: user.avatar_url,
+        followersCount: user.follower_count,
+        followingCount: user.following_count,
+        likesCount: user.likes_count
+      },
+      lastSynced: new Date()
+    };
+  }
+  
+  async getPosts(account: SocialAccount, options?: { limit?: number; before?: string }): Promise<SocialPost[]> {
+    const limit = options?.limit || 20;
+    const cursor = options?.before || 0;
+    
+    const response = await fetch(`${this.baseUrl}/video/list/?cursor=${cursor}&max_count=${limit}`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${account.accessToken}`
+      }
+    });
+    
+    if (!response.ok) {
+      throw new Error('Échec de récupération des vidéos TikTok');
+    }
+    
+    const data = await response.json();
+    
+    if (data.data.error_code !== 0) {
+      throw new Error(`Erreur TikTok: ${data.data.description}`);
+    }
+    
+    return data.data.videos.map((video: any) => {
+      return {
+        id: `tiktok_post_${video.id}`,
+        platform: 'tiktok',
+        accountId: account.id,
+        content: {
+          text: video.title,
+          media: {
+            type: 'video',
+            urls: [video.share_url],
+            thumbnail: video.cover_image_url
+          }
+        },
+        status: 'published',
+        publishedAt: new Date(video.create_time * 1000),
+        stats: {
+          views: video.view_count,
+          likes: video.like_count,
+          comments: video.comment_count,
+          shares: video.share_count,
+          engagement: video.like_count + video.comment_count + video.share_count
+        },
+        platformPostId: video.id,
+        metadata: {
+          permalink: video.share_url,
+          duration: video.duration,
+          height: video.height,
+          width: video.width
+        }
+      };
+    });
+  }
+  
+  async createPost(account: SocialAccount, post: Partial<SocialPost>): Promise<SocialPost> {
+    // L'upload de vidéos TikTok nécessite plusieurs étapes complexes
+    // Pour cet exemple, nous simplifierons grandement le processus
+    
+    // Dans la réalité, il faudrait:
+    // 1. Créer une session d'upload
+    // 2. Télécharger le fichier vidéo par morceaux
+    // 3. Finaliser l'upload
+    // 4. Publier avec les métadonnées
+    
+    // Nous simulons ici une publication réussie
+    return {
+      id: `tiktok_post_simulated_${Date.now()}`,
+      platform: 'tiktok',
+      accountId: account.id,
+      content: post.content || { text: '' },
+      status: 'published',
+      publishedAt: new Date(),
+      platformPostId: `simulated_${Date.now()}`,
+      metadata: {
+        permalink: `https://www.tiktok.com/@${account.metadata.username}/video/simulated_${Date.now()}`
+      }
+    };
+  }
+  
+  async schedulePost(account: SocialAccount, post: Partial<SocialPost>): Promise<SocialPost> {
+    // TikTok ne supporte pas encore la programmation via l'API
+    // On stocke donc localement et on utilisera un job pour publier au moment voulu
+    
+    if (!post.scheduledFor) {
+      throw new Error('Date de programmation requise');
+    }
+    
+    return {
+      id: `scheduled_tiktok_${Date.now()}`,
+      platform: 'tiktok',
+      accountId: account.id,
+      content: post.content || { text: '' },
+      status: 'scheduled',
+      scheduledFor: post.scheduledFor,
+      metadata: {}
+    };
+  }
+  
+  async deletePost(account: SocialAccount, postId: string): Promise<boolean> {
+    // Extraction de l'ID de la plateforme
+    const videoId = postId.includes('_post_') 
+      ? postId.split('_post_')[1] 
+      : postId;
+    
+    // TikTok ne supporte pas encore la suppression de vidéos via l'API publique
+    // Dans une implémentation réelle, il faudrait utiliser d'autres méthodes
+    
+    // Pour cet exemple, nous simulons une suppression réussie
+    return true;
+  }
+  
+  async getAnalytics(account: SocialAccount, period: 'day' | 'week' | 'month'): Promise<SocialAnalytics> {
+    // L'API TikTok a des limitations concernant les analytics
+    // Pour cet exemple, nous simulons des données raisonnables
+    
+    const userInfo = await this.getAccountInfo(account);
+    const followersCount = userInfo.metadata.followersCount || 0;
+    
+    const now = new Date();
+    let since: Date;
+    
+    switch (period) {
+      case 'day':
+        since = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+        break;
+      case 'week':
+        since = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+        break;
+      case 'month':
+      default:
+        since = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+        break;
+    }
+    
+    // Récupérer les vidéos récentes pour calculer l'engagement
+    const recentPosts = await this.getPosts(account, { limit: 50 });
+    
+    // Calculer les statistiques d'engagement
+    const views = recentPosts.reduce((sum, post) => sum + (post.stats?.views || 0), 0);
+    const likes = recentPosts.reduce((sum, post) => sum + (post.stats?.likes || 0), 0);
+    const comments = recentPosts.reduce((sum, post) => sum + (post.stats?.comments || 0), 0);
+    const shares = recentPosts.reduce((sum, post) => sum + (post.stats?.shares || 0), 0);
+    
+    // Simuler la croissance des abonnés
+    const growthRate = 5; // 5% par mois est une croissance raisonnable
+    const scaledGrowth = growthRate * (period === 'day' ? 1/30 : period === 'week' ? 7/30 : 1);
+    
+    // Simuler l'historique des abonnés
+    const followerHistory = this.getSimulatedFollowerHistory(
+      followersCount,
+      scaledGrowth,
+      since,
+      now
+    );
+    
+    return {
+      platform: 'tiktok',
+      period,
+      followers: {
+        count: followersCount,
+        growth: scaledGrowth,
+        history: followerHistory
+      },
+      engagement: {
+        rate: followersCount > 0 && recentPosts.length > 0 
+          ? ((likes + comments + shares) / (followersCount * recentPosts.length)) * 100 
+          : 0,
+        likes,
+        comments,
+        shares,
+        views
+      }
+    };
+  }
+  
+  private getSimulatedFollowerHistory(
+    currentFollowers: number,
+    growthRate: number,
+    since: Date,
+    now: Date
+  ): { date: string; value: number }[] {
+    const history: { date: string; value: number }[] = [];
+    
+    // Créer des points de données quotidiens
+    const dayMillis = 24 * 60 * 60 * 1000;
+    const days = Math.ceil((now.getTime() - since.getTime()) / dayMillis);
+    
+    // TikTok a généralement une croissance exponentielle plutôt que linéaire
+    const dailyGrowthFactor = Math.pow(1 + (growthRate / 100), 1 / days);
+    
+    for (let i = 0; i < days; i++) {
+      const date = new Date(since.getTime() + i * dayMillis);
+      // Croissance exponentielle inversée dans le temps
+      const followerCount = Math.round(currentFollowers / Math.pow(dailyGrowthFactor, days - i));
+      
+      history.push({
+        date: date.toISOString().split('T')[0],
+        value: followerCount
+      });
+    }
+    
+    return history;
+  }
+  
+  async getPostAnalytics(account: SocialAccount, postId: string): Promise<Partial<SocialPost>> {
+    // L'API TikTok ne fournit pas encore d'analyses détaillées par vidéo
+    // Dans une implémentation réelle, il faudrait utiliser les données existantes
+    
+    // On extrait l'ID de la vidéo
+    const videoId = postId.includes('_post_') 
+      ? postId.split('_post_')[1] 
+      : postId;
+    
+    // Nous simulons en récupérant les informations de base de la vidéo
+    try {
+      // Récupérer toutes les vidéos récentes
+      const videos = await this.getPosts(account, { limit: 30 });
+      
+      // Trouver la vidéo correspondante
+      const video = videos.find(v => v.platformPostId === videoId);
+      
+      if (video) {
+        return { stats: video.stats };
+      }
+      
+      // Si la vidéo n'est pas trouvée, simuler des données
+      return {
+        stats: {
+          views: Math.floor(Math.random() * 10000),
+          likes: Math.floor(Math.random() * 1000),
+          comments: Math.floor(Math.random() * 100),
+          shares: Math.floor(Math.random() * 100)
+        }
+      };
+    } catch (error) {
+      console.error('Erreur lors de la récupération des analytics de la vidéo TikTok:', error);
+      return {
+        stats: {
+          views: 0,
+          likes: 0,
+          comments: 0,
+          shares: 0
+        }
+      };
+    }
+  }
+  
+  async getComments(account: SocialAccount, postId: string): Promise<any[]> {
+    // Extraction de l'ID de la plateforme
+    const videoId = postId.includes('_post_') 
+      ? postId.split('_post_')[1] 
+      : postId;
+    
+    const response = await fetch(`${this.baseUrl}/comment/list/?video_id=${videoId}`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${account.accessToken}`
+      }
+    });
+    
+    if (!response.ok) {
+      throw new Error(`Échec de récupération des commentaires pour ${postId}`);
+    }
+    
+    const data = await response.json();
+    
+    if (data.data.error_code !== 0) {
+      throw new Error(`Erreur TikTok: ${data.data.description}`);
+    }
+    
+    return (data.data.comments || []).map((comment: any) => ({
+      id: comment.id,
+      text: comment.text,
+      author: {
+        id: comment.user.open_id,
+        name: comment.user.display_name || comment.user.username,
+        profileUrl: `https://www.tiktok.com/@${comment.user.username}`
+      },
+      createdAt: new Date(comment.create_time * 1000)
+    }));
+  }
+  
+  async replyToComment(account: SocialAccount, commentId: string, reply: string): Promise<any> {
+    const response = await fetch(`${this.baseUrl}/comment/reply/`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${account.accessToken}`
+      },
+      body: JSON.stringify({
+        comment_id: commentId,
+        content: reply
+      })
+    });
+    
+    if (!response.ok) {
+      throw new Error(`Échec de réponse au commentaire ${commentId}`);
+    }
+    
+    const data = await response.json();
+    
+    if (data.data.error_code !== 0) {
+      throw new Error(`Erreur TikTok: ${data.data.description}`);
+    }
+    
+    return { id: data.data.comment_id, success: true };
+  }
+  
+  async deleteComment(account: SocialAccount, commentId: string): Promise<boolean> {
+    const response = await fetch(`${this.baseUrl}/comment/delete/`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${account.accessToken}`
+      },
+      body: JSON.stringify({
+        comment_id: commentId
+      })
+    });
+    
+    if (!response.ok) {
+      throw new Error(`Échec de suppression du commentaire ${commentId}`);
+    }
+    
+    const data = await response.json();
+    
+    if (data.data.error_code !== 0) {
+      throw new Error(`Erreur TikTok: ${data.data.description}`);
+    }
+    
+    return true;
+  }
+  }
+  

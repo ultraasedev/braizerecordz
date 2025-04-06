@@ -1,0 +1,219 @@
+import { verifyAuth } from "@/app/lib/auth";
+import connectDB from "@/app/lib/mongodb";
+import { ObjectId } from "mongodb";
+import { NextRequest, NextResponse } from "next/server";
+
+// app/api/social/posts/route.ts
+export async function GET(req: NextRequest) {
+    try {
+      // Vérifier l'authentification
+      const authResult = await verifyAuth(req);
+      if (!authResult) {
+        return NextResponse.json({ error: "Non autorisé" }, { status: 401 });
+      }
+  
+      // Récupérer les paramètres de la requête
+      const searchParams = req.nextUrl.searchParams;
+      const platform = searchParams.get("platform");
+      const limit = parseInt(searchParams.get("limit") || "10");
+      const before = searchParams.get("before");
+      const status = searchParams.get("status") || "published";
+      
+      // Connexion à la base de données
+      const db = await connectDB();
+      
+      if (status === "scheduled") {
+        // Récupérer les publications programmées depuis notre base de données
+        const scheduledPostsCollection = new db.Collection("scheduledPosts");
+        
+        // Construire la requête
+        const query: any = { userId: new ObjectId(authResult.userId) };
+        
+        if (platform) {
+          query.platform = platform;
+        }
+        
+        const posts = await scheduledPostsCollection
+          .find(query)
+          .sort({ scheduledFor: 1 })
+          .limit(limit)
+          .toArray();
+        
+        return NextResponse.json(posts);
+      } else {
+        // Pour les publications publiées, récupérer depuis les API des plateformes
+        const socialAccountsCollection = new db.Collection("socialAccounts");
+        
+        // Récupérer les comptes de l'utilisateur
+        let accountsQuery: any = { userId: new ObjectId(authResult.userId), connected: true };
+        
+        if (platform) {
+          accountsQuery.platform = platform;
+        }
+        
+        const accounts = await socialAccountsCollection
+          .find(accountsQuery)
+          .toArray();
+        
+        if (accounts.length === 0) {
+          return NextResponse.json([]);
+        }
+        
+        // Récupérer les publications pour chaque compte
+        const allPosts = [];
+        
+        for (const account of accounts) {
+          try {
+            // Vérifier et rafraîchir le token si nécessaire
+            if (account.tokenExpiry && new Date(account.tokenExpiry) < new Date()) {
+              const service = PlatformServiceFactory.getService(account.platform);
+              const refreshedAccount = await service.refreshToken(account);
+              
+              // Mettre à jour le compte dans la base de données
+              await socialAccountsCollection.updateOne(
+                { _id: account._id },
+                { $set: {
+                  accessToken: refreshedAccount.accessToken,
+                  refreshToken: refreshedAccount.refreshToken,
+                  tokenExpiry: refreshedAccount.tokenExpiry
+                }}
+              );
+              
+              account.accessToken = refreshedAccount.accessToken;
+            }
+            
+            // Récupérer les publications
+            const service = PlatformServiceFactory.getService(account.platform);
+            const posts = await service.getPosts(account, { limit, before });
+            
+            allPosts.push(...posts);
+          } catch (error) {
+            console.error(`Erreur lors de la récupération des publications ${account.platform}:`, error);
+            // Continuer avec les autres comptes
+          }
+        }
+        
+        // Trier par date de publication
+        allPosts.sort((a, b) => {
+          const dateA = a.publishedAt?.getTime() || 0;
+          const dateB = b.publishedAt?.getTime() || 0;
+          return dateB - dateA;
+        });
+        
+        // Limiter le nombre de résultats
+        const limitedPosts = allPosts.slice(0, limit);
+        
+        return NextResponse.json(limitedPosts);
+      }
+    } catch (error: any) {
+      console.error("Erreur lors de la récupération des publications:", error);
+      return NextResponse.json({ error: "Erreur serveur" }, { status: 500 });
+    }
+  }
+  
+  export async function POST(req: NextRequest) {
+    try {
+      // Vérifier l'authentification
+      const authResult = await verifyAuth(req);
+      if (!authResult) {
+        return NextResponse.json({ error: "Non autorisé" }, { status: 401 });
+      }
+  
+      // Récupérer les données de la publication
+      const data = await req.json();
+      
+      const { content, platform, scheduledFor } = data;
+      
+      if (!platform || !content) {
+        return NextResponse.json({ error: "Données incomplètes" }, { status: 400 });
+      }
+      
+      // Connexion à la base de données
+      const db = await connectDB();
+      const socialAccountsCollection = new db.Collection("socialAccounts");
+      
+      // Récupérer le compte correspondant à la plateforme
+      const account = await socialAccountsCollection.findOne({
+        userId: new ObjectId(authResult.userId),
+        platform,
+        connected: true
+      });
+      
+      if (!account) {
+        return NextResponse.json({ error: `Aucun compte ${platform} connecté` }, { status: 404 });
+      }
+      
+      // Vérifier et rafraîchir le token si nécessaire
+      if (account.tokenExpiry && new Date(account.tokenExpiry) < new Date()) {
+        const service = PlatformServiceFactory.getService(platform);
+        const refreshedAccount = await service.refreshToken(account);
+        
+        // Mettre à jour le compte dans la base de données
+        await socialAccountsCollection.updateOne(
+          { _id: account._id },
+          { $set: {
+            accessToken: refreshedAccount.accessToken,
+            refreshToken: refreshedAccount.refreshToken,
+            tokenExpiry: refreshedAccount.tokenExpiry
+          }}
+        );
+        
+        account.accessToken = refreshedAccount.accessToken;
+      }
+      
+      const service = PlatformServiceFactory.getService(platform);
+      
+      // Si une date de programmation est fournie
+      if (scheduledFor) {
+        const scheduledDate = new Date(scheduledFor);
+        
+        // Si la date est dans le passé
+        if (scheduledDate < new Date()) {
+          return NextResponse.json({ error: "La date de programmation ne peut pas être dans le passé" }, { status: 400 });
+        }
+        
+        // Programmer la publication
+        const post = await service.schedulePost(account, {
+          content,
+          scheduledFor: scheduledDate
+        });
+        
+        // Stocker la publication programmée dans notre base de données
+        const scheduledPostsCollection = new db.Collection("scheduledPosts");
+        
+        const result = await scheduledPostsCollection.insertOne({
+          ...post,
+          userId: new ObjectId(authResult.userId),
+          createdAt: new Date(),
+          updatedAt: new Date()
+        });
+        
+        return NextResponse.json({
+          ...post,
+          _id: result.insertedId
+        });
+      } else {
+        // Publier immédiatement
+        const post = await service.createPost(account, { content });
+        
+        // Stocker la publication dans notre base de données pour suivi
+        const postsCollection = new db.Collection("socialPosts");
+        
+        const result = await postsCollection.insertOne({
+          ...post,
+          userId: new ObjectId(authResult.userId),
+          createdAt: new Date(),
+          updatedAt: new Date()
+        });
+        
+        return NextResponse.json({
+          ...post,
+          _id: result.insertedId
+        });
+      }
+    } catch (error: any) {
+      console.error("Erreur lors de la création de la publication:", error);
+      return NextResponse.json({ error: error.message || "Erreur serveur" }, { status: 500 });
+    }
+  }
+  

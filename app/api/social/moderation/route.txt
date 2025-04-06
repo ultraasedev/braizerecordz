@@ -1,0 +1,153 @@
+import { verifyAuth } from "@/app/lib/auth";
+import connectDB from "@/app/lib/mongodb";
+import { ObjectId } from "mongodb";
+import { NextRequest, NextResponse } from "next/server";
+
+// app/api/social/moderation/route.ts
+export async function GET(req: NextRequest) {
+    try {
+      // Vérifier l'authentification
+      const authResult = await verifyAuth(req);
+      if (!authResult) {
+        return NextResponse.json({ error: "Non autorisé" }, { status: 401 });
+      }
+  
+      // Récupérer les paramètres de la requête
+      const searchParams = req.nextUrl.searchParams;
+      const platform = searchParams.get("platform");
+      const status = searchParams.get("status") || "pending";
+      const limit = parseInt(searchParams.get("limit") || "50");
+      
+      // Connexion à la base de données
+      const db = await connectDB();
+      const socialAccountsCollection = new db.Collection("socialAccounts");
+      const moderationCollection = new db.Collection("socialModeration");
+      
+      // Récupérer les comptes de l'utilisateur
+      let accountsQuery: any = { userId: new ObjectId(authResult.userId), connected: true };
+      
+      if (platform) {
+        accountsQuery.platform = platform;
+      }
+      
+      const accounts = await socialAccountsCollection
+        .find(accountsQuery)
+        .toArray();
+      
+      // Construire la requête de modération
+      const moderationQuery: any = {
+        accountId: { $in: accounts.map((a: { _id: { toString: () => any; }; }) => a._id.toString()) }
+      };
+      
+      if (status !== "all") {
+        moderationQuery.status = status;
+      }
+      
+      // Récupérer les éléments de modération
+      const moderationItems = await moderationCollection
+        .find(moderationQuery)
+        .sort({ createdAt: -1 })
+        .limit(limit)
+        .toArray();
+      
+      return NextResponse.json(moderationItems);
+    } catch (error: any) {
+      console.error("Erreur lors de la récupération des éléments de modération:", error);
+      return NextResponse.json({ error: "Erreur serveur" }, { status: 500 });
+    }
+  }
+  
+  export async function PATCH(req: NextRequest) {
+    try {
+      // Vérifier l'authentification
+      const authResult = await verifyAuth(req);
+      if (!authResult) {
+        return NextResponse.json({ error: "Non autorisé" }, { status: 401 });
+      }
+  
+      // Récupérer les données de la requête
+      const data = await req.json();
+      const { id, status, comment } = data;
+      
+      if (!id || !status) {
+        return NextResponse.json({ error: "Données incomplètes" }, { status: 400 });
+      }
+      
+      // Connexion à la base de données
+      const db = await connectDB();
+      const moderationCollection = new db.Collection("socialModeration");
+      
+      // Vérifier que l'élément existe et appartient à l'utilisateur
+      const moderationItem = await moderationCollection.findOne({
+        _id: new ObjectId(id)
+      });
+      
+      if (!moderationItem) {
+        return NextResponse.json({ error: "Élément non trouvé" }, { status: 404 });
+      }
+      
+      // Vérifier que l'utilisateur a accès au compte associé
+      const socialAccountsCollection = new db.Collection("socialAccounts");
+      const account = await socialAccountsCollection.findOne({
+        _id: new ObjectId(moderationItem.accountId),
+        userId: new ObjectId(authResult.userId)
+      });
+      
+      if (!account) {
+        return NextResponse.json({ error: "Non autorisé" }, { status: 403 });
+      }
+      
+      // Mettre à jour l'élément de modération
+      await moderationCollection.updateOne(
+        { _id: new ObjectId(id) },
+        { $set: {
+          status,
+          moderatorComment: comment,
+          moderatedAt: new Date(),
+          moderatedBy: authResult.userId,
+          updatedAt: new Date()
+        }}
+      );
+      
+      // Si le statut est "approved" ou "rejected", prendre l'action correspondante sur la plateforme
+      if (status === "approved" || status === "rejected") {
+        try {
+          // Vérifier et rafraîchir le token si nécessaire
+          if (account.tokenExpiry && new Date(account.tokenExpiry) < new Date()) {
+            const service = PlatformServiceFactory.getService(account.platform);
+            const refreshedAccount = await service.refreshToken(account);
+            
+            // Mettre à jour le compte dans la base de données
+            await socialAccountsCollection.updateOne(
+              { _id: account._id },
+              { $set: {
+                accessToken: refreshedAccount.accessToken,
+                refreshToken: refreshedAccount.refreshToken,
+                tokenExpiry: refreshedAccount.tokenExpiry
+              }}
+            );
+            
+            account.accessToken = refreshedAccount.accessToken;
+          }
+          
+          const service = PlatformServiceFactory.getService(account.platform);
+          
+          if (status === "approved" && moderationItem.type === "comment") {
+            // Ne rien faire, le commentaire reste tel quel
+          } else if (status === "rejected" && moderationItem.type === "comment") {
+            // Supprimer le commentaire
+            await service.deleteComment(account, moderationItem.commentId);
+          }
+        } catch (error) {
+          console.error(`Erreur lors de l'action sur la plateforme:`, error);
+          // Continuer malgré l'erreur
+        }
+      }
+      
+      return NextResponse.json({ success: true });
+    } catch (error: any) {
+      console.error("Erreur lors de la mise à jour de l'élément de modération:", error);
+      return NextResponse.json({ error: "Erreur serveur" }, { status: 500 });
+    }
+  }
+  
